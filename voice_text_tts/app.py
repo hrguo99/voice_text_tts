@@ -210,7 +210,7 @@ def create_interface() -> gr.Blocks:
                 received_first_chunk: 是否已收到第一个音频chunk
 
             Returns:
-                估算的进度值（0-100）
+                估算的进度值（0-100），如果无法估算则返回None
             """
             if not received_first_chunk:
                 # 还没收到第一个chunk：从8%平滑增长到48%
@@ -222,8 +222,21 @@ def create_interface() -> gr.Blocks:
                     progress_increase = 40
                 return min(48, 8 + progress_increase)
             else:
-                # 已收到chunk：保持当前进度（等待服务端进度更新）
-                return None
+                # 已收到chunk：从65%继续基于时间平滑增长到92%
+                # 假设生成过程大约需要20-30秒
+                time_since_first_chunk = max(0, elapsed_time - 10)  # 假设前10秒等待首个chunk
+
+                if time_since_first_chunk < 15:
+                    # 前15秒：从65%增长到85%
+                    progress = 65 + (time_since_first_chunk / 15.0) * 20
+                elif time_since_first_chunk < 30:
+                    # 15-30秒：继续增长到92%
+                    progress = 85 + ((time_since_first_chunk - 15) / 15.0) * 7
+                else:
+                    # 30秒后：保持在92%
+                    progress = 92
+
+                return min(92, progress)
 
         def _update_progress(progress_value: float, label: str):
             """统一的进度更新接口"""
@@ -320,17 +333,34 @@ def create_interface() -> gr.Blocks:
                 received_chunks = 0  # 本地计数器，用于时间估算
                 first_chunk_received = False
                 last_update_time = time.time() - 1.0
+                has_server_progress = False  # 标记服务端是否提供进度信息
+
+                # 预先发送几个进度更新，防止在等待第一个TCP chunk时进度卡住
+                # 这是因为iter_content会阻塞，直到有数据到达才会执行循环
+                import socket
+                try:
+                    # 设置socket超时，让iter_content可以定期返回（即使没有数据）
+                    # 这样我们就能在等待期间更新进度
+                    response.raw._fp.fp._sock.settimeout(0.1)  # 100ms超时
+                except:
+                    pass  # 如果设置失败也没关系，继续使用默认行为
 
                 try:
-                    for tcp_chunk in response.iter_content(chunk_size=2048, decode_unicode=False):
+                    # 使用流式响应
+                    for tcp_chunk in response.iter_content(chunk_size=1024, decode_unicode=False):
+                        # 每次循环都检查时间并更新进度（即使没有新数据）
                         current_time = time.time()
                         elapsed_time = current_time - start_time
                         time_since_last_update = (current_time - last_update_time) if last_update_time > 0 else 999
 
-                        # 基于时间的进度估算（仅在未收到第一个chunk时）
-                        if not first_chunk_received and time_since_last_update >= 0.2:
-                            estimated_progress = _calculate_time_progress(elapsed_time, False)
+                        # 基于时间的进度估算（仅在服务端无进度信息时使用）
+                        if not has_server_progress and time_since_last_update >= 0.1:
+                            estimated_progress = _calculate_time_progress(elapsed_time, first_chunk_received)
                             if estimated_progress is not None:
+                                # 确保不会倒退
+                                estimated_progress = max(estimated_progress, last_progress)
+                                # 确保不会超过接收完成进度
+                                estimated_progress = min(estimated_progress, PROGRESS_RECEIVING_DONE - 1)
                                 yield _update_progress(estimated_progress, f"生成进度 {estimated_progress:.2f}%"), gr.update(visible=False), gr.update(visible=False)
                                 last_progress = estimated_progress
                                 last_update_time = current_time
@@ -384,7 +414,8 @@ def create_interface() -> gr.Blocks:
                                 server_progress = metadata.get('progress', -1)
 
                                 if total_chunks > 0 and server_progress >= 0:
-                                    # 服务端提供了准确的进度信息
+                                    # 服务端提供了准确的进度信息，使用服务端进度并禁用时间估算
+                                    has_server_progress = True
                                     server_total_progress = 10 + (server_progress / 100) * 85
                                     server_total_progress = min(PROGRESS_RECEIVING_DONE, server_total_progress)
 
