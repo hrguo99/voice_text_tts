@@ -1,0 +1,13 @@
+# 语音生成功能 - Python依赖包
+# Python 3.13
+
+# Gradio界面框架
+gradio>=5.0.0
+
+# 音频处理
+numpy>=1.24.0
+ffmpeg-python>=0.2.0
+pydub>=0.25.0
+
+# HTTP请求（用于API调用）
+requests>=2.31.0
