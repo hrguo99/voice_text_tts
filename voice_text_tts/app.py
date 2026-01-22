@@ -9,6 +9,7 @@ import os
 import tempfile
 import requests
 import wave
+import json
 from typing import Optional, Tuple
 from ffmpy import FFmpeg
 from config import API_HOST, API_PORT, API_MODE, PROMPT_TEXT
@@ -58,177 +59,6 @@ class AudioConverter:
             # 如果转换失败，返回原文件（假设格式已经正确）
             print(f"音频转换警告: {str(e)}")
             return input_path
-
-
-class VoiceTTSGenerator:
-    """语音生成器"""
-
-    def __init__(self, progress: Optional[gr.Progress] = None):
-        """
-        初始化语音生成器
-        配置API端点和认证信息
-
-        Args:
-            progress: Gradio进度条对象（可选）
-        """
-        self.api_endpoint = f"http://{API_HOST}:{API_PORT}/inference_{API_MODE}"
-        self.model_name = "Fun-CosyVoice3-0.5B-2512"  # 模型名称
-        self.prompt_text = PROMPT_TEXT  # prompt_text配置
-        self.progress = progress  # 进度条对象
-
-    def generate_voice(
-        self,
-        reference_audio: str,
-        text: str,
-        prompt_audio_text: str = ""
-    ) -> Tuple[str, str]:
-        """
-        根据参考音频和文本生成语音
-
-        Args:
-            reference_audio: 参考音频文件路径
-            text: 要合成的文本内容
-            prompt_audio_text: 参考音频对应的文本内容（可选）
-
-        Returns:
-            (生成的音频路径, 消息文本)
-        """
-        try:
-            # 步骤1: 验证输入
-            if self.progress:
-                self.progress(0.1, desc="验证输入参数...")
-
-            if not reference_audio:
-                return None, "语音模型生成失败：请提供参考音频"
-
-            if not text or text.strip() == "":
-                return None, "语音模型生成失败：请输入要合成的文本"
-
-            if not prompt_audio_text or prompt_audio_text.strip() == "":
-                return None, "语音模型生成失败：请输入示例音频对应的文本内容"
-
-            if len(text) > 1000:
-                return None, "语音模型生成失败：文本长度超过1000字符限制"
-
-            # 步骤2: 转换音频格式
-            if self.progress:
-                self.progress(0.2, desc="转换音频格式...")
-
-            converter = AudioConverter()
-            if not reference_audio.endswith('.wav'):
-                reference_audio = converter.convert_to_wav(reference_audio)
-
-            # 步骤3: 准备API请求
-            if self.progress:
-                self.progress(0.3, desc="准备API请求...")
-
-            # 调用API生成语音（zero_shot模式）
-            # 拼接prompt_text：将配置的PROMPT_TEXT与用户输入的示例音频文本拼接
-            final_prompt_text = f"{self.prompt_text}{prompt_audio_text}"
-
-            payload = {
-                'tts_text': text,
-                'prompt_text': final_prompt_text
-            }
-
-            # 步骤4: 发送请求到API
-            if self.progress:
-                self.progress(0.4, desc="发送请求到语音生成API...")
-
-            # 打开文件
-            try:
-                with open(reference_audio, 'rb') as audio_file:
-                    files = [
-                        ('prompt_wav', ('prompt_wav', audio_file, 'application/octet-stream'))
-                    ]
-
-                    response = requests.request(
-                        "GET",  # 使用GET方法，与client.py保持一致
-                        self.api_endpoint,
-                        data=payload,
-                        files=files,
-                        stream=True,
-                        timeout=300  # 增加超时时间到300秒（5分钟）
-                    )
-
-            except FileNotFoundError:
-                return None, f"语音模型生成失败：找不到音频文件 {reference_audio}"
-
-            if response.status_code == 200:
-                # 步骤5: 接收音频数据
-                if self.progress:
-                    self.progress(0.5, desc="接收生成的音频数据...")
-
-                # 接收音频数据（处理分块传输）
-                tts_audio = b''
-                chunk_count = 0
-                try:
-                    # 使用iter_content处理分块传输的数据
-                    for chunk in response.iter_content(chunk_size=8192, decode_unicode=False):
-                        if chunk:  # 过滤掉keep-alive的空chunk
-                            tts_audio += chunk
-                            chunk_count += 1
-                            # 更新进度条 (0.5 到 0.8)
-                            if self.progress and chunk_count % 10 == 0:
-                                progress_val = 0.5 + min(0.3, chunk_count * 0.01)
-                                self.progress(progress_val, desc=f"接收音频数据... ({len(tts_audio)//1024}KB)")
-                except requests.exceptions.ChunkedEncodingError as e:
-                    # 分块编码错误，但可能已经接收了部分数据
-                    if len(tts_audio) > 0:
-                        pass  # 尝试使用已接收的数据
-                    else:
-                        return None, f"语音模型生成失败：接收数据时连接中断 - {str(e)}"
-                except Exception as e:
-                    # 即使有异常，如果已经接收到数据，尝试使用
-                    if len(tts_audio) > 0:
-                        pass  # 尝试使用已接收的数据
-                    else:
-                        return None, f"语音模型生成失败：接收音频数据失败 - {str(e)}"
-
-                # 检查数据是否有效
-                if len(tts_audio) == 0:
-                    return None, "语音模型生成失败：接收到的音频数据为空"
-
-                # 步骤6: 转换音频数据
-                if self.progress:
-                    self.progress(0.85, desc="处理音频数据...")
-
-                # 将音频数据转换为int16数组
-                try:
-                    audio_array = np.frombuffer(tts_audio, dtype=np.int16)
-                except Exception as e:
-                    return None, f"语音模型生成失败：音频数据转换失败 - {str(e)}"
-
-                # 步骤7: 保存音频文件
-                if self.progress:
-                    self.progress(0.95, desc="保存音频文件...")
-
-                # 使用wave模块保存音频
-                output_path = os.path.join(tempfile.gettempdir(), 'generated_voice.wav')
-                try:
-                    with wave.open(output_path, 'wb') as wav_file:
-                        wav_file.setnchannels(1)  # 单声道
-                        wav_file.setsampwidth(2)  # 16-bit = 2 bytes
-                        wav_file.setframerate(22050)  # 采样率 22050
-                        wav_file.writeframes(audio_array.tobytes())
-                except Exception as e:
-                    return None, f"语音模型生成失败：保存音频文件失败 - {str(e)}"
-
-                # 完成
-                if self.progress:
-                    self.progress(1.0, desc="生成完成！")
-
-                return output_path, "生成成功！"
-            else:
-                error_text = response.text
-                return None, f"语音模型生成失败：API调用失败 - HTTP {response.status_code} - {error_text}"
-
-        except requests.exceptions.ConnectionError as e:
-            return None, f"语音模型生成失败：连接API失败 - {str(e)}"
-        except requests.exceptions.Timeout as e:
-            return None, f"语音模型生成失败：请求超时 - {str(e)}"
-        except Exception as e:
-            return None, f"语音模型生成失败：{str(e)}"
 
 
 def create_interface() -> gr.Blocks:
@@ -339,13 +169,14 @@ def create_interface() -> gr.Blocks:
 
                         # 进度条（默认隐藏）
                         progress_bar = gr.Slider(
-                            label="生成进度",
+                            label="生成进度 0.00%",
                             value=0,
                             minimum=0,
                             maximum=100,
-                            step=1,
+                            step=0.01,  # 允许两位小数进度
                             visible=False,
-                            interactive=False
+                            interactive=False,
+                            elem_classes=["progress-slider"]  # 添加自定义类名
                         )
 
                         # 输出区域 - 使用Column来容纳音频或错误消息
@@ -369,37 +200,82 @@ def create_interface() -> gr.Blocks:
                                 elem_classes=["error-message"]
                             )
 
+        # 进度更新辅助函数
+        def _calculate_time_progress(elapsed_time: float, received_first_chunk: bool) -> float:
+            """
+            根据经过的时间计算估算进度
+
+            Args:
+                elapsed_time: 已经过的秒数
+                received_first_chunk: 是否已收到第一个音频chunk
+
+            Returns:
+                估算的进度值（0-100）
+            """
+            if not received_first_chunk:
+                # 还没收到第一个chunk：从8%平滑增长到48%
+                if elapsed_time < 5:
+                    progress_increase = (elapsed_time / 5.0) * 24
+                elif elapsed_time < 10:
+                    progress_increase = 24 + ((elapsed_time - 5) / 5.0) * 24
+                else:
+                    progress_increase = 40
+                return min(48, 8 + progress_increase)
+            else:
+                # 已收到chunk：保持当前进度（等待服务端进度更新）
+                return None
+
+        def _update_progress(progress_value: float, label: str):
+            """统一的进度更新接口"""
+            return gr.update(value=progress_value, visible=True, label=f"生成进度 {progress_value:.2f}%")
+
         # 绑定事件
         def handle_generate(audio_upload_file, audio_mic_file, text, prompt_audio_text_val):
             """处理生成请求"""
             # 优先使用上传的音频，如果没有则使用录制的音频
             reference_audio = audio_upload_file or audio_mic_file
 
+            import time
+            start_time = time.time()
+            last_update_time = 0
+            last_progress = 0
+
+            # 进度常量定义
+            PROGRESS_INITIAL = 0
+            PROGRESS_VALIDATED = 4
+            PROGRESS_CONVERTED = 6
+            PROGRESS_REQUEST_SENT = 8
+            PROGRESS_FIRST_CHUNK = 65
+            PROGRESS_RECEIVING_DONE = 95
+            PROGRESS_CONVERTING = 96
+            PROGRESS_SAVING = 98
+            PROGRESS_DONE = 100
+
             # 步骤1: 验证输入（显示进度条）
-            yield gr.update(value=10, visible=True), gr.update(visible=False), gr.update(visible=False)
+            yield _update_progress(PROGRESS_INITIAL, f"生成进度 {PROGRESS_INITIAL:.2f}%"), gr.update(visible=False), gr.update(visible=False)
 
             if not reference_audio:
-                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 请提供参考音频")
+                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 请提供参考音频")
                 return
             if not text or text.strip() == "":
-                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 请输入要合成的文本")
+                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 请输入要合成的文本")
                 return
             if not prompt_audio_text_val or prompt_audio_text_val.strip() == "":
-                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 请输入参考音频对应的文本内容")
+                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 请输入参考音频对应的文本内容")
                 return
             if len(text) > 1000:
-                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 文本长度超过1000字符限制")
+                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 文本长度超过1000字符限制")
                 return
 
             # 步骤2: 转换音频格式
-            yield gr.update(value=20), gr.update(visible=False), gr.update(visible=False)
+            yield _update_progress(PROGRESS_VALIDATED, f"生成进度 {PROGRESS_VALIDATED:.2f}%"), gr.update(visible=False), gr.update(visible=False)
 
             converter = AudioConverter()
             if not reference_audio.endswith('.wav'):
                 reference_audio = converter.convert_to_wav(reference_audio)
 
             # 步骤3: 准备API请求
-            yield gr.update(value=30), gr.update(visible=False), gr.update(visible=False)
+            yield _update_progress(PROGRESS_CONVERTED, f"生成进度 {PROGRESS_CONVERTED:.2f}%"), gr.update(visible=False), gr.update(visible=False)
 
             final_prompt_text = f"{PROMPT_TEXT}{prompt_audio_text_val}"
             payload = {
@@ -408,7 +284,7 @@ def create_interface() -> gr.Blocks:
             }
 
             # 步骤4: 发送请求到API
-            yield gr.update(value=40), gr.update(visible=False), gr.update(visible=False)
+            yield _update_progress(PROGRESS_REQUEST_SENT, f"生成进度 {PROGRESS_REQUEST_SENT:.2f}%"), gr.update(visible=False), gr.update(visible=False)
 
             try:
                 with open(reference_audio, 'rb') as audio_file:
@@ -424,47 +300,126 @@ def create_interface() -> gr.Blocks:
                         stream=True,
                         timeout=300
                     )
+
+                    last_update_time = time.time() - 1.0  # 确保第一次循环就能触发更新
+
             except FileNotFoundError:
-                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 找不到音频文件 {reference_audio}")
+                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 找不到音频文件 {reference_audio}")
+                return
+            except requests.exceptions.ConnectionError as e:
+                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 连接API失败 - {str(e)}")
                 return
             except Exception as e:
-                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 连接API失败 - {str(e)}")
+                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 连接API失败 - {str(e)}")
                 return
 
             if response.status_code == 200:
-                # 步骤5: 接收音频数据
-                yield gr.update(value=50), gr.update(visible=False), gr.update(visible=False)
-
+                # 步骤5: 接收音频数据（带真实进度信息）
                 tts_audio = b''
-                chunk_count = 0
+                buffer = b''
+                received_chunks = 0  # 本地计数器，用于时间估算
+                first_chunk_received = False
+                last_update_time = time.time() - 1.0
+
                 try:
-                    for chunk in response.iter_content(chunk_size=8192, decode_unicode=False):
-                        if chunk:
-                            tts_audio += chunk
-                            chunk_count += 1
-                            # 动态更新进度 (50% - 80%)
-                            if chunk_count % 10 == 0:
-                                progress_val = min(80, 50 + chunk_count // 5)
-                                yield gr.update(value=progress_val), gr.update(visible=False), gr.update(visible=False)
+                    for tcp_chunk in response.iter_content(chunk_size=2048, decode_unicode=False):
+                        current_time = time.time()
+                        elapsed_time = current_time - start_time
+                        time_since_last_update = (current_time - last_update_time) if last_update_time > 0 else 999
+
+                        # 基于时间的进度估算（仅在未收到第一个chunk时）
+                        if not first_chunk_received and time_since_last_update >= 0.2:
+                            estimated_progress = _calculate_time_progress(elapsed_time, False)
+                            if estimated_progress is not None:
+                                yield _update_progress(estimated_progress, f"生成进度 {estimated_progress:.2f}%"), gr.update(visible=False), gr.update(visible=False)
+                                last_progress = estimated_progress
+                                last_update_time = current_time
+
+                        if tcp_chunk:
+                            buffer += tcp_chunk
+
+                            # 解析buffer中的数据块（格式: 4字节长度 + JSON + 音频数据）
+                            while len(buffer) >= 4:
+                                metadata_length = int.from_bytes(buffer[:4], byteorder='big')
+
+                                if len(buffer) < 4 + metadata_length:
+                                    break
+
+                                metadata_json = buffer[4:4 + metadata_length].decode('utf-8')
+                                metadata = json.loads(metadata_json)
+
+                                audio_data_start = 4 + metadata_length
+                                audio_data_end = audio_data_start + metadata['audio_size']
+
+                                if len(buffer) < audio_data_end:
+                                    break
+
+                                audio_chunk = buffer[audio_data_start:audio_data_end]
+                                tts_audio += audio_chunk
+
+                                buffer = buffer[audio_data_end:]
+
+                                # 处理开始标记（服务端开始生成）
+                                if metadata['chunk_index'] == -1 and metadata.get('status') == 'generating':
+                                    continue
+
+                                # 第一次接收到实际音频数据
+                                if not first_chunk_received:
+                                    yield _update_progress(PROGRESS_FIRST_CHUNK, f"生成进度 {PROGRESS_FIRST_CHUNK:.2f}%"), gr.update(visible=False), gr.update(visible=False)
+                                    first_chunk_received = True
+                                    last_progress = PROGRESS_FIRST_CHUNK
+                                    last_update_time = current_time
+                                    received_chunks = 0
+
+                                # 检查是否是结束标记
+                                if metadata.get('is_final', False):
+                                    yield _update_progress(PROGRESS_RECEIVING_DONE, f"生成进度 {PROGRESS_RECEIVING_DONE:.2f}%"), gr.update(visible=False), gr.update(visible=False)
+                                    break
+
+                                # 更新本地计数器（用于估算）
+                                received_chunks += 1
+
+                                # 使用TTS模型返回的进度信息
+                                total_chunks = metadata.get('total_chunks', -1)
+                                server_progress = metadata.get('progress', -1)
+
+                                if total_chunks > 0 and server_progress >= 0:
+                                    # 服务端提供了准确的进度信息
+                                    server_total_progress = 10 + (server_progress / 100) * 85
+                                    server_total_progress = min(PROGRESS_RECEIVING_DONE, server_total_progress)
+
+                                    chunk_index = metadata['chunk_index']
+                                    is_last_chunk = (chunk_index == total_chunks - 1)
+
+                                    # 只在进度显著变化或最后一个chunk时更新
+                                    if abs(server_total_progress - last_progress) >= 1 or is_last_chunk:
+                                        yield _update_progress(server_total_progress, f"生成进度 {server_total_progress:.2f}%"), gr.update(visible=False), gr.update(visible=False)
+                                        last_progress = server_total_progress
+
+                except requests.exceptions.ChunkedEncodingError:
+                    if len(tts_audio) == 0:
+                        yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 接收数据时连接中断")
+                        return
                 except Exception as e:
-                    yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 接收音频数据失败 - {str(e)}")
-                    return
+                    if len(tts_audio) == 0:
+                        yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 接收音频数据失败 - {str(e)}")
+                        return
 
                 if len(tts_audio) == 0:
-                    yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 接收到的音频数据为空")
+                    yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 接收到的音频数据为空")
                     return
 
                 # 步骤6: 转换音频数据
-                yield gr.update(value=85), gr.update(visible=False), gr.update(visible=False)
+                yield _update_progress(PROGRESS_CONVERTING, f"生成进度 {PROGRESS_CONVERTING:.2f}%"), gr.update(visible=False), gr.update(visible=False)
 
                 try:
                     audio_array = np.frombuffer(tts_audio, dtype=np.int16)
                 except Exception as e:
-                    yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 音频数据转换失败 - {str(e)}")
+                    yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 音频数据转换失败 - {str(e)}")
                     return
 
                 # 步骤7: 保存音频文件
-                yield gr.update(value=95), gr.update(visible=False), gr.update(visible=False)
+                yield _update_progress(PROGRESS_SAVING, f"生成进度 {PROGRESS_SAVING:.2f}%"), gr.update(visible=False), gr.update(visible=False)
 
                 output_path = os.path.join(tempfile.gettempdir(), 'generated_voice.wav')
                 try:
@@ -474,13 +429,13 @@ def create_interface() -> gr.Blocks:
                         wav_file.setframerate(22050)
                         wav_file.writeframes(audio_array.tobytes())
                 except Exception as e:
-                    yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 保存音频文件失败 - {str(e)}")
+                    yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 保存音频文件失败 - {str(e)}")
                     return
 
                 # 完成（隐藏进度条，显示音频）
-                yield gr.update(value=100, visible=False), gr.update(value=output_path, visible=True), gr.update(visible=False)
+                yield gr.update(value=PROGRESS_DONE, visible=False, label=f"生成进度 {PROGRESS_DONE:.2f}%"), gr.update(value=output_path, visible=True), gr.update(visible=False)
             else:
-                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ API调用失败 - HTTP {response.status_code}")
+                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ API调用失败 - HTTP {response.status_code}")
 
         generate_btn.click(
             fn=handle_generate,
@@ -950,6 +905,24 @@ def main():
     .error-message p {
         color: #991b1b !important;
         margin: 0 !important;
+    }
+
+    /* 隐藏进度条右边的数值显示和重置按钮 */
+    .progress-slider .tab-like-container {
+        display: none !important;
+    }
+
+    .progress-slider input[type="number"] {
+        display: none !important;
+    }
+
+    .progress-slider .reset-button {
+        display: none !important;
+    }
+
+    /* 针对所有gradio slider的通用隐藏 */
+    .gradio-slider .tab-like-container {
+        display: none !important;
     }
     """
 
