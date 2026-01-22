@@ -337,6 +337,17 @@ def create_interface() -> gr.Blocks:
                     with gr.Column(scale=1, elem_classes=["output-section"]):
                         gr.Markdown("### 输出结果", elem_classes=["module-title"])
 
+                        # 进度条（默认隐藏）
+                        progress_bar = gr.Slider(
+                            label="生成进度",
+                            value=0,
+                            minimum=0,
+                            maximum=100,
+                            step=1,
+                            visible=False,
+                            interactive=False
+                        )
+
                         # 输出区域 - 使用Column来容纳音频或错误消息
                         with gr.Column() as output_container:
                             # 输出音频
@@ -359,32 +370,122 @@ def create_interface() -> gr.Blocks:
                             )
 
         # 绑定事件
-        def handle_generate(audio_upload_file, audio_mic_file, text, prompt_audio_text_val, progress=gr.Progress()):
+        def handle_generate(audio_upload_file, audio_mic_file, text, prompt_audio_text_val):
             """处理生成请求"""
             # 优先使用上传的音频，如果没有则使用录制的音频
             reference_audio = audio_upload_file or audio_mic_file
 
-            # 创建一个新的生成器实例，传入进度条
-            generator_with_progress = VoiceTTSGenerator(progress=progress)
+            # 步骤1: 验证输入（显示进度条）
+            yield gr.update(value=10, visible=True), gr.update(visible=False), gr.update(visible=False)
 
-            audio_path, message = generator_with_progress.generate_voice(reference_audio, text, prompt_audio_text_val)
+            if not reference_audio:
+                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 请提供参考音频")
+                return
+            if not text or text.strip() == "":
+                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 请输入要合成的文本")
+                return
+            if not prompt_audio_text_val or prompt_audio_text_val.strip() == "":
+                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 请输入参考音频对应的文本内容")
+                return
+            if len(text) > 1000:
+                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 文本长度超过1000字符限制")
+                return
 
-            # 如果生成失败（audio_path为None），隐藏音频，显示错误消息
-            if audio_path is None:
-                return (
-                    gr.update(visible=False),  # 隐藏音频
-                    gr.update(visible=True, value=f"### ❌ {message}")  # 显示错误
-                )
-            # 如果成功，显示音频，隐藏错误消息
-            return (
-                gr.update(value=audio_path, visible=True),  # 显示音频
-                gr.update(visible=False)  # 隐藏错误消息
-            )
+            # 步骤2: 转换音频格式
+            yield gr.update(value=20), gr.update(visible=False), gr.update(visible=False)
+
+            converter = AudioConverter()
+            if not reference_audio.endswith('.wav'):
+                reference_audio = converter.convert_to_wav(reference_audio)
+
+            # 步骤3: 准备API请求
+            yield gr.update(value=30), gr.update(visible=False), gr.update(visible=False)
+
+            final_prompt_text = f"{PROMPT_TEXT}{prompt_audio_text_val}"
+            payload = {
+                'tts_text': text,
+                'prompt_text': final_prompt_text
+            }
+
+            # 步骤4: 发送请求到API
+            yield gr.update(value=40), gr.update(visible=False), gr.update(visible=False)
+
+            try:
+                with open(reference_audio, 'rb') as audio_file:
+                    files = [
+                        ('prompt_wav', ('prompt_wav', audio_file, 'application/octet-stream'))
+                    ]
+
+                    response = requests.request(
+                        "GET",
+                        f"http://{API_HOST}:{API_PORT}/inference_{API_MODE}",
+                        data=payload,
+                        files=files,
+                        stream=True,
+                        timeout=300
+                    )
+            except FileNotFoundError:
+                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 找不到音频文件 {reference_audio}")
+                return
+            except Exception as e:
+                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 连接API失败 - {str(e)}")
+                return
+
+            if response.status_code == 200:
+                # 步骤5: 接收音频数据
+                yield gr.update(value=50), gr.update(visible=False), gr.update(visible=False)
+
+                tts_audio = b''
+                chunk_count = 0
+                try:
+                    for chunk in response.iter_content(chunk_size=8192, decode_unicode=False):
+                        if chunk:
+                            tts_audio += chunk
+                            chunk_count += 1
+                            # 动态更新进度 (50% - 80%)
+                            if chunk_count % 10 == 0:
+                                progress_val = min(80, 50 + chunk_count // 5)
+                                yield gr.update(value=progress_val), gr.update(visible=False), gr.update(visible=False)
+                except Exception as e:
+                    yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 接收音频数据失败 - {str(e)}")
+                    return
+
+                if len(tts_audio) == 0:
+                    yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 接收到的音频数据为空")
+                    return
+
+                # 步骤6: 转换音频数据
+                yield gr.update(value=85), gr.update(visible=False), gr.update(visible=False)
+
+                try:
+                    audio_array = np.frombuffer(tts_audio, dtype=np.int16)
+                except Exception as e:
+                    yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 音频数据转换失败 - {str(e)}")
+                    return
+
+                # 步骤7: 保存音频文件
+                yield gr.update(value=95), gr.update(visible=False), gr.update(visible=False)
+
+                output_path = os.path.join(tempfile.gettempdir(), 'generated_voice.wav')
+                try:
+                    with wave.open(output_path, 'wb') as wav_file:
+                        wav_file.setnchannels(1)
+                        wav_file.setsampwidth(2)
+                        wav_file.setframerate(22050)
+                        wav_file.writeframes(audio_array.tobytes())
+                except Exception as e:
+                    yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 保存音频文件失败 - {str(e)}")
+                    return
+
+                # 完成（隐藏进度条，显示音频）
+                yield gr.update(value=100, visible=False), gr.update(value=output_path, visible=True), gr.update(visible=False)
+            else:
+                yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ API调用失败 - HTTP {response.status_code}")
 
         generate_btn.click(
             fn=handle_generate,
             inputs=[audio_upload, audio_mic, text_input, prompt_audio_text],
-            outputs=[output_audio, output_error]
+            outputs=[progress_bar, output_audio, output_error]
         )
 
     return app
