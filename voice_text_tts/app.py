@@ -63,14 +63,18 @@ class AudioConverter:
 class VoiceTTSGenerator:
     """语音生成器"""
 
-    def __init__(self):
+    def __init__(self, progress: Optional[gr.Progress] = None):
         """
         初始化语音生成器
         配置API端点和认证信息
+
+        Args:
+            progress: Gradio进度条对象（可选）
         """
         self.api_endpoint = f"http://{API_HOST}:{API_PORT}/inference_{API_MODE}"
         self.model_name = "Fun-CosyVoice3-0.5B-2512"  # 模型名称
         self.prompt_text = PROMPT_TEXT  # prompt_text配置
+        self.progress = progress  # 进度条对象
 
     def generate_voice(
         self,
@@ -90,7 +94,10 @@ class VoiceTTSGenerator:
             (生成的音频路径, 消息文本)
         """
         try:
-            # 验证输入
+            # 步骤1: 验证输入
+            if self.progress:
+                self.progress(0.1, desc="验证输入参数...")
+
             if not reference_audio:
                 return None, "语音模型生成失败：请提供参考音频"
 
@@ -103,10 +110,17 @@ class VoiceTTSGenerator:
             if len(text) > 1000:
                 return None, "语音模型生成失败：文本长度超过1000字符限制"
 
-            # 转换音频为WAV格式（如果需要）
+            # 步骤2: 转换音频格式
+            if self.progress:
+                self.progress(0.2, desc="转换音频格式...")
+
             converter = AudioConverter()
             if not reference_audio.endswith('.wav'):
                 reference_audio = converter.convert_to_wav(reference_audio)
+
+            # 步骤3: 准备API请求
+            if self.progress:
+                self.progress(0.3, desc="准备API请求...")
 
             # 调用API生成语音（zero_shot模式）
             # 拼接prompt_text：将配置的PROMPT_TEXT与用户输入的示例音频文本拼接
@@ -116,6 +130,10 @@ class VoiceTTSGenerator:
                 'tts_text': text,
                 'prompt_text': final_prompt_text
             }
+
+            # 步骤4: 发送请求到API
+            if self.progress:
+                self.progress(0.4, desc="发送请求到语音生成API...")
 
             # 打开文件
             try:
@@ -137,13 +155,23 @@ class VoiceTTSGenerator:
                 return None, f"语音模型生成失败：找不到音频文件 {reference_audio}"
 
             if response.status_code == 200:
+                # 步骤5: 接收音频数据
+                if self.progress:
+                    self.progress(0.5, desc="接收生成的音频数据...")
+
                 # 接收音频数据（处理分块传输）
                 tts_audio = b''
+                chunk_count = 0
                 try:
                     # 使用iter_content处理分块传输的数据
                     for chunk in response.iter_content(chunk_size=8192, decode_unicode=False):
                         if chunk:  # 过滤掉keep-alive的空chunk
                             tts_audio += chunk
+                            chunk_count += 1
+                            # 更新进度条 (0.5 到 0.8)
+                            if self.progress and chunk_count % 10 == 0:
+                                progress_val = 0.5 + min(0.3, chunk_count * 0.01)
+                                self.progress(progress_val, desc=f"接收音频数据... ({len(tts_audio)//1024}KB)")
                 except requests.exceptions.ChunkedEncodingError as e:
                     # 分块编码错误，但可能已经接收了部分数据
                     if len(tts_audio) > 0:
@@ -161,11 +189,19 @@ class VoiceTTSGenerator:
                 if len(tts_audio) == 0:
                     return None, "语音模型生成失败：接收到的音频数据为空"
 
+                # 步骤6: 转换音频数据
+                if self.progress:
+                    self.progress(0.85, desc="处理音频数据...")
+
                 # 将音频数据转换为int16数组
                 try:
                     audio_array = np.frombuffer(tts_audio, dtype=np.int16)
                 except Exception as e:
                     return None, f"语音模型生成失败：音频数据转换失败 - {str(e)}"
+
+                # 步骤7: 保存音频文件
+                if self.progress:
+                    self.progress(0.95, desc="保存音频文件...")
 
                 # 使用wave模块保存音频
                 output_path = os.path.join(tempfile.gettempdir(), 'generated_voice.wav')
@@ -177,6 +213,10 @@ class VoiceTTSGenerator:
                         wav_file.writeframes(audio_array.tobytes())
                 except Exception as e:
                     return None, f"语音模型生成失败：保存音频文件失败 - {str(e)}"
+
+                # 完成
+                if self.progress:
+                    self.progress(1.0, desc="生成完成！")
 
                 return output_path, "生成成功！"
             else:
@@ -193,9 +233,6 @@ class VoiceTTSGenerator:
 
 def create_interface() -> gr.Blocks:
     """创建Gradio界面"""
-
-    # 初始化语音生成器
-    generator = VoiceTTSGenerator()
 
     # 创建界面
     with gr.Blocks(title="语音生成功能") as app:
@@ -214,11 +251,10 @@ def create_interface() -> gr.Blocks:
                 with gr.Column(elem_classes=["input-section"]):
                     gr.Markdown("### 输入区域", elem_classes=["module-title"])
 
-                    # 步骤1: 参考音频输入
-                    gr.Markdown("### 参考音频", elem_classes=["module-title"])
-
+                    # 步骤1: 参考音频输入和输入文本
                     with gr.Row():
                         with gr.Column(scale=1):
+                            gr.Markdown("### 参考音频", elem_classes=["module-title"])
                             with gr.Tabs(elem_classes=["audio-tabs"]):
                                 with gr.Tab("上传音频"):
                                     audio_upload = gr.Audio(
@@ -236,6 +272,7 @@ def create_interface() -> gr.Blocks:
                                         label="麦克风录制",
                                         type="filepath",
                                         sources=["microphone"],
+                                        interactive=True,
                                         waveform_options=gr.WaveformOptions(
                                             waveform_color="#667eea",
                                             waveform_progress_color="#764ba2"
@@ -243,29 +280,50 @@ def create_interface() -> gr.Blocks:
                                     )
 
                         with gr.Column(scale=1):
-                            # 步骤2: 示例音频文本输入框（必填）
-                            gr.Markdown("### 示例音频文本", elem_classes=["module-title"])
+                            # 步骤2: 参考音频文本输入框（必填）
+                            gr.Markdown("### 参考音频文本", elem_classes=["module-title"])
                             prompt_audio_text = gr.Textbox(
-                                label="示例音频文本内容 *",
-                                placeholder="【必填】请输入上传的示例音频对应的文字内容",
-                                lines=2,
-                                max_lines=3
+                                label="参考音频文本内容 *",
+                                placeholder="【必填】请输入上传的参考音频对应的文字内容",
+                                lines=7,
+                                max_lines=6
                             )
 
                     # 增加间距
                     gr.Markdown("", elem_classes=["spacer-xl"])
 
-                    # 步骤3: 输入文本
-                    gr.Markdown("### 输入文本", elem_classes=["module-title"])
-                    text_input = gr.Textbox(
-                        label="输入文本",
-                        placeholder="请输入要合成的文字内容（建议1000字符以内）",
-                        lines=4,
-                        max_lines=6
-                    )
+                    # 步骤3: 输入文本和使用说明
+                    with gr.Row():
+                        with gr.Column(scale=1):
+                            gr.Markdown("### 输入文本", elem_classes=["module-title"])
+                            text_input = gr.Textbox(
+                                label="输入文本",
+                                placeholder="请输入要合成的文字内容（建议1000字符以内）",
+                                lines=7,
+                                max_lines=12
+                            )
+
+                        with gr.Column(scale=1):
+                            # 使用说明
+                            gr.Markdown("### 使用说明", elem_classes=["module-title"])
+                            gr.Markdown(
+                                """
+                                **步骤说明：**
+                                1. 参考音频 - 选择上传音频文件或使用麦克风录制
+                                2. 参考音频文本 - 【必填】输入参考音频对应的文字内容
+                                3. 输入文本 - 在文本框中输入要合成的文字内容
+                                4. 生成语音 - 点击"生成语音"按钮开始合成
+
+                                **注意事项：**
+                                1. 参考音频建议使用清晰、无背景噪音的语音
+                                2. 参考音频文本将自动与系统提示词拼接，帮助AI更好地学习声音特征
+                                3. 文本长度建议在 1000 字符以内
+                                4. 支持的音频格式: WAV, MP3, M4A
+                                """,
+                                elem_classes=["instructions"]
+                            )
 
                     # 步骤4: 生成按钮
-                    gr.Markdown("### 生成", elem_classes=["module-title"])
                     generate_btn = gr.Button(
                         "生成语音",
                         variant="primary",
@@ -273,12 +331,9 @@ def create_interface() -> gr.Blocks:
                         elem_classes=["generate-button-full-width"]
                     )
 
-                # 增加间距
-                gr.Markdown("", elem_classes=["spacer-medium"])
-
                 # 下部：输出区域
                 with gr.Row():
-                    # 左列：输出结果
+                    # 输出结果
                     with gr.Column(scale=1, elem_classes=["output-section"]):
                         gr.Markdown("### 输出结果", elem_classes=["module-title"])
 
@@ -303,34 +358,16 @@ def create_interface() -> gr.Blocks:
                                 elem_classes=["error-message"]
                             )
 
-                    # 右列：使用说明
-                    with gr.Column(scale=1, elem_classes=["instructions-section"]):
-                        gr.Markdown(
-                            """
-                            ### 使用说明
-
-                            **步骤说明:**
-                            - 1. 参考音频 - 选择上传音频文件或使用麦克风录制
-                            - 2. 填写示例音频文本 - 【必填】输入参考音频对应的文字内容
-                            - 3. 输入文本 - 在文本框中输入要合成的文字内容
-                            - 4. 生成语音 - 点击"生成语音"按钮开始合成
-
-                            **注意事项:**
-                            - 参考音频建议使用清晰、无背景噪音的语音
-                            - 示例音频文本将自动与系统提示词拼接，帮助AI更好地学习声音特征
-                            - 文本长度建议在 1000 字符以内
-                            - 支持的音频格式: WAV, MP3, M4A
-                            """,
-                            elem_classes=["instructions"]
-                        )
-
         # 绑定事件
-        def handle_generate(audio_upload_file, audio_mic_file, text, prompt_audio_text_val):
+        def handle_generate(audio_upload_file, audio_mic_file, text, prompt_audio_text_val, progress=gr.Progress()):
             """处理生成请求"""
             # 优先使用上传的音频，如果没有则使用录制的音频
             reference_audio = audio_upload_file or audio_mic_file
 
-            audio_path, message = generator.generate_voice(reference_audio, text, prompt_audio_text_val)
+            # 创建一个新的生成器实例，传入进度条
+            generator_with_progress = VoiceTTSGenerator(progress=progress)
+
+            audio_path, message = generator_with_progress.generate_voice(reference_audio, text, prompt_audio_text_val)
 
             # 如果生成失败（audio_path为None），隐藏音频，显示错误消息
             if audio_path is None:
@@ -364,6 +401,7 @@ def main():
         font-family: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
         background-color: #ffffff !important;
         color: #1a1a2e !important;
+        zoom: 1.25 !important;
     }
 
     /* 隐藏 Gradio 底部页脚 */
@@ -387,9 +425,10 @@ def main():
     .main-container {
         background-color: #ffffff !important;
         box-shadow: none !important;
-        padding: 24px !important;
+        padding: 16px !important;
         margin: 0 !important;
         border: none !important;
+        max-width: 100% !important;
     }
 
     /* 去掉页面的边框和阴影 */
@@ -398,17 +437,26 @@ def main():
         box-shadow: none !important;
     }
 
+    /* 确保所有交互元素可点击 */
+    .gradio-container button,
+    .gradio-container .gradio-audio button,
+    .gradio-container input[type="button"] {
+        pointer-events: auto !important;
+        z-index: 100 !important;
+        position: relative !important;
+    }
+
     /* 标题样式 - 深蓝背景白色文字 */
     .app-title {
         text-align: left;
         color: #ffffff !important;
-        font-size: 45px !important;
+        font-size: 36px !important;
         font-weight: 900 !important;
         background-color: #091a31 !important;
-        padding: 8px 24px !important;
+        padding: 6px 16px !important;
         display: flex !important;
         align-items: center !important;
-        min-height: 50px !important;
+        min-height: 40px !important;
         margin-bottom: 8px !important;
     }
 
@@ -500,8 +548,8 @@ def main():
         background: #f8f9fa !important;
         border: 1px solid #e9ecef !important;
         border-radius: 8px !important;
-        padding: 20px !important;
-        margin-bottom: 16px !important;
+        padding: 16px !important;
+        margin-bottom: 0 !important;
         box-shadow: none !important;
     }
 
@@ -510,8 +558,21 @@ def main():
         background: #f8f9fa !important;
         border: 1px solid #e9ecef !important;
         border-radius: 8px !important;
-        padding: 20px !important;
+        padding: 16px !important;
+        margin-top: 2px !important;
         box-shadow: none !important;
+    }
+
+    /* 移除主容器内所有行和列的额外间距 */
+    .main-container > .gradio-column,
+    .main-container > div > .gradio-column {
+        gap: 2px !important;
+    }
+
+    .main-container .gradio-row,
+    .main-container > div > .gradio-row {
+        gap: 0 !important;
+        margin-bottom: 0 !important;
     }
 
     /* 说明区域样式 */
@@ -524,18 +585,31 @@ def main():
 
     /* 模块标题样式 */
     .module-title {
-        margin-top: 4px !important;
-        margin-bottom: 4px !important;
+        margin-top: 0 !important;
+        margin-bottom: 6px !important;
         padding-bottom: 0 !important;
         border-bottom: none !important;
         color: #2c3e50 !important;
-        font-size: 14px !important;
+        font-size: 13px !important;
         font-weight: 600 !important;
         text-transform: uppercase !important;
         letter-spacing: 0.08em !important;
     }
 
     /* 间距样式 */
+    .spacer-xs {
+        min-height: 1px !important;
+        height: 1px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        display: block !important;
+    }
+
+    .spacer-sm {
+        min-height: 8px !important;
+        height: 8px !important;
+    }
+
     .spacer-medium {
         min-height: 16px !important;
         height: 16px !important;
@@ -547,63 +621,65 @@ def main():
     }
 
     .spacer-xl {
-        min-height: 120px !important;
-        height: 120px !important;
+        min-height: 40px !important;
+        height: 40px !important;
     }
 
     /* 说明区域样式 - 简洁风格 */
     .instructions {
         background-color: transparent !important;
         border: none !important;
-        padding: 16px 0 !important;
+        padding: 0 !important;
         border-radius: 0 !important;
         margin-top: 0 !important;
         box-shadow: none !important;
+        font-size: 13px !important;
+    }
+
+    /* 输入文本列样式 - 让输入文本靠下对齐 */
+    .input-text-column {
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: flex-end !important;
     }
 
     .instructions h3 {
         margin-top: 0 !important;
-        margin-bottom: 12px !important;
-        font-size: 14px !important;
+        margin-bottom: 6px !important;
+        font-size: 13px !important;
         color: #1a1a2e !important;
         border: none !important;
         padding: 0 !important;
         font-weight: 600 !important;
     }
 
-    .instructions p,
-    .instructions li {
+    .instructions p {
         color: #2a2a3a !important;
-        font-size: 14px !important;
-        line-height: 1.7 !important;
-        margin: 6px 0 !important;
+        font-size: 13px !important;
+        line-height: 1.5 !important;
+        margin: 3px 0 !important;
         text-align: left !important;
         padding-left: 0 !important;
+    }
+
+    .instructions ul {
+        list-style-type: disc !important;
+        padding-left: 18px !important;
+        margin: 3px 0 !important;
+        text-align: left !important;
+    }
+
+    .instructions li {
+        text-align: left !important;
+        color: #2a2a3a !important;
+        font-size: 13px !important;
+        line-height: 1.5 !important;
+        margin: 1px 0 !important;
     }
 
     .instructions strong {
         color: #0f3460 !important;
         font-weight: 600 !important;
-    }
-
-    /* 去掉列表前的圆点 */
-    .instructions ul {
-        list-style-type: none !important;
-        padding-left: 0 !important;
-        margin-left: 0 !important;
-        text-align: left !important;
-    }
-
-    .instructions li {
-        text-align: left !important;
-        padding-left: 0 !important;
-        margin-left: 0 !important;
-        display: block !important;
-        width: 100% !important;
-    }
-
-    .instructions li::marker {
-        content: "" !important;
     }
 
     /* 输入框样式 - 简洁风格 */
@@ -678,28 +754,72 @@ def main():
     .gradio-audio {
         border: 1px solid #d0d3d9 !important;
         border-radius: 4px !important;
-        padding: 8px !important;
+        padding: 6px !important;
         background: #ffffff !important;
-        min-height: 80px !important;
-        max-height: 80px !important;
+        min-height: 90px !important;
+        max-height: 100px !important;
         box-sizing: border-box !important;
-        overflow: hidden !important;
+        overflow: visible !important;
+    }
+
+    /* 确保录音按钮可见和可点击 */
+    .gradio-audio .record-button,
+    .gradio-audio .stop-button,
+    .gradio-audio button {
+        display: inline-flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        cursor: pointer !important;
+    }
+
+    /* 录音按钮样式 */
+    .gradio-audio .record-button {
+        background-color: #dc2626 !important;
+        color: #ffffff !important;
+        border: none !important;
+        padding: 8px 16px !important;
+        border-radius: 4px !important;
+    }
+
+    .gradio-audio .record-button:hover {
+        background-color: #b91c1c !important;
+    }
+
+    .gradio-audio .stop-button {
+        background-color: #1a1a2e !important;
+        color: #ffffff !important;
+        border: none !important;
+        padding: 8px 16px !important;
+        border-radius: 4px !important;
+    }
+
+    .gradio-audio .stop-button:hover {
+        background-color: #0f172a !important;
+    }
+
+    /* 确保按钮没有被禁用 */
+    .gradio-audio button:disabled {
+        opacity: 0.5 !important;
+        cursor: not-allowed !important;
     }
 
     /* Tab内容固定高度 */
     .audio-tabs {
-        min-height: 140px !important;
-        max-height: 140px !important;
+        min-height: auto !important;
+        max-height: none !important;
         overflow: visible !important;
+        height: auto !important;
     }
 
     /* Tab内容内部音频组件更小 */
     .audio-tabs .gradio-audio {
-        min-height: 80px !important;
-        max-height: 80px !important;
-        padding: 6px !important;
+        min-height: auto !important;
+        max-height: none !important;
+        padding: 8px !important;
         overflow: visible !important;
         box-sizing: border-box !important;
+        height: auto !important;
     }
 
     /* 滑块样式 */
