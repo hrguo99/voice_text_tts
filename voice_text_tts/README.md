@@ -1,147 +1,202 @@
-# 语音生成功能
+# 语音生成功能 (Voice Text TTS)
 
-基于 Gradio 和 Fun-CosyVoice3-0.5B-2512 的语音合成应用，支持通过参考音频和文本生成对应人声的语音。
+基于 Gradio 和 Fun-CosyVoice3-0.5B-2512 的语音合成应用，支持 ASR 语音识别和多后端支持。
 
 ## 功能特点
 
-- 音频输入支持：上传音频文件和实时麦克风录制
-- 音频波形可视化显示
-- 自动音频格式转换（支持 WAV、MP3、M4A 转换为模型所需的 WAV 格式）
-- 简洁美观的用户界面，白色和浅蓝色主题
-- 实时生成语音反馈
+- 🎤 **音频输入**: 上传音频文件或实时麦克风录制
+- 🎙️ **ASR 语音识别**: 自动识别参考音频中的文字
+- 🔄 **多 ASR 后端**: 支持 FunASR、通用 WebSocket 等多种后端
+- 📊 **波形可视化**: 实时显示音频波形
+- 🎵 **自动格式转换**: 支持 WAV、MP3、M4A 转换
+- 🎨 **简洁界面**: 白色和浅蓝色主题
 
-## 环境要求
+## 快速开始
 
-- Python 3.13+
-- FFmpeg（用于音频格式转换）
-
-## 安装步骤
-
-### 1. 安装 FFmpeg
-
-**Windows:**
-```bash
-# 使用 chocolatey
-choco install ffmpeg
-
-# 或从官网下载: https://ffmpeg.org/download.html
-```
-
-**Linux:**
-```bash
-sudo apt-get install ffmpeg  # Ubuntu/Debian
-sudo yum install ffmpeg      # CentOS/RHEL
-```
-
-**macOS:**
-```bash
-brew install ffmpeg
-```
-
-### 2. 安装 Python 依赖
+### 1. 安装依赖
 
 ```bash
-cd voice_text_tts
+# 安装 FFmpeg
+sudo apt-get install ffmpeg  # Linux
+brew install ffmpeg          # macOS
+choco install ffmpeg         # Windows
+
+# 安装 Python 依赖
 pip install -r requirements.txt
 ```
 
-## 配置 API
+### 2. 配置
 
-在 [config.py](config.py) 文件中配置 Fun-CosyVoice3-0.5B-2512 API 相关设置：
+编辑 [config.py](config.py):
 
 ```python
-# API配置
-API_HOST = "0.0.0.0"  # API服务器地址
-API_PORT = "50000"  # API服务器端口
-API_MODE = "zero_shot"  # 使用zero_shot模式
+# TTS API 配置
+API_HOST = "127.0.0.1"
+API_PORT = "50000"
+API_MODE = "zero_shot"
 
-# prompt_text配置
-PROMPT_TEXT = "希望你以后能够做的比我还好呦。"  # 默认提示文本
+# ASR 配置
+ASR_ENABLED = True
+ASR_BACKEND_TYPE = "funasr"  # 或 "websocket"
+ASR_BACKEND_CONFIG = {
+    "funasr": {
+        "uri": "ws://localhost:10095/ws",
+        "mode": "2pass-offline",
+    }
+}
 ```
 
-确保 Fun-CosyVoice3-0.5B-2512 API 服务已启动并运行在配置的地址和端口上。
-
-## 使用方法
-
-启动应用：
+### 3. 运行
 
 ```bash
 python app.py
 ```
 
-应用将在 `http://localhost:7860` 启动。
+访问: http://127.0.0.1:7862
 
-### 使用流程
+## 使用方法
 
-1. **提供参考音频**
-   - 选择"上传音频"选项卡上传音频文件
-   - 或选择"录制音频"选项卡使用麦克风实时录制
+### TTS 语音合成
 
-2. **输入文本**
-   - 在文本框中输入要合成的文字内容
-   - 建议文本长度在 1000 字符以内
+1. 上传或录制参考音频
+2. 输入参考音频对应的文字（或点击"提取音频文字"自动识别）
+3. 输入要合成的文本
+4. 点击"生成语音"
 
-3. **生成语音**
-   - 点击"生成语音"按钮
-   - 等待生成完成，在右侧播放生成的语音
+### ASR 语音识别
+
+点击"提取音频文字"按钮自动识别参考音频内容。
+
+```python
+from asr_client import transcribe_audio_sync
+
+# 使用默认配置
+result = transcribe_audio_sync("audio.wav")
+
+# 指定后端
+result = transcribe_audio_sync(
+    "audio.wav",
+    backend_type="funasr",
+    mode="2pass-offline"
+)
+```
+
+## ASR 后端
+
+### FunASR 后端
+
+支持多种模式：
+- `offline` - 离线批量识别
+- `online` - 流式识别
+- `2pass-offline` - 两遍识别（推荐）
+- `2pass-online` - 两遍流式识别
+
+```python
+ASR_BACKEND_CONFIG = {
+    "funasr": {
+        "uri": "ws://localhost:10095/ws",
+        "mode": "2pass-offline",
+        "chunk_size": [5, 10, 5],
+        "hotwords": '{"阿里巴巴": 20}',
+    }
+}
+```
+
+### 通用 WebSocket 后端
+
+适用于任何 WebSocket ASR 服务：
+
+```python
+ASR_BACKEND_CONFIG = {
+    "websocket": {
+        "uri": "ws://localhost:8080/asr",
+    }
+}
+```
+
+### 自定义后端
+
+```python
+from asr_backends import ASRBackend, ASRBackendFactory
+
+class MyASRBackend(ASRBackend):
+    async def connect(self) -> bool:
+        # 实现连接逻辑
+        pass
+
+    async def disconnect(self):
+        # 实现断开逻辑
+        pass
+
+    async def transcribe(self, audio_path: str, callback=None) -> str:
+        # 实现识别逻辑
+        pass
+
+# 注册并使用
+ASRBackendFactory.register_backend("myasr", MyASRBackend)
+result = transcribe_audio_sync("audio.wav", backend_type="myasr")
+```
 
 ## 项目结构
 
 ```
 voice_text_tts/
-├── app.py              # 主应用程序
-├── requirements.txt    # Python依赖包列表
-└── README.md          # 项目说明文档
+├── app.py              # Gradio 应用主程序
+├── asr_backends.py     # ASR 后端抽象层
+├── asr_client.py       # ASR 客户端
+├── config.py           # 配置文件
+├── requirements.txt    # Python 依赖
+├── ASR_README.md       # ASR 详细文档
+└── README.md           # 本文档
 ```
 
-## 支持的音频格式
+## API 参考
 
-- **输入格式**: WAV, MP3, M4A
-- **模型格式**: WAV（16kHz, 单声道, 16bit PCM）
+### ASRClient
 
-应用会自动将上传的音频转换为模型所需的格式。
+```python
+from asr_client import ASRClient
 
-## 注意事项
+# 异步使用
+async with ASRClient(backend_type="funasr") as client:
+    result = await client.transcribe_audio_file("audio.wav")
+```
 
-- 参考音频建议使用清晰、无背景噪音的语音
-- 文本长度建议在 1000 字符以内
-- 首次使用需要在代码中配置API端点（对用户不可见）
-- 确保 FFmpeg 已正确安装并添加到系统路径
+### 配置参数
+
+**FunASR 后端参数:**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| uri | str | ws://localhost:10095/ws | 服务器地址 |
+| mode | str | 2pass-offline | ASR 模式 |
+| chunk_size | list | [5, 10, 5] | 分块大小 |
+| hotwords | str | {} | 热词配置 |
+| use_itn | bool | True | 是否使用 ITN |
 
 ## 技术栈
 
-- **前端框架**: Gradio 5.0+
-- **音频处理**: FFmpeg, numpy, pydub, wave
+- **前端**: Gradio 5.0+
+- **音频处理**: FFmpeg, numpy, wave
+- **ASR**: FunASR, WebSocket
+- **TTS**: Fun-CosyVoice3-0.5B-2512
 - **语言**: Python 3.13
-- **语音合成**: Fun-CosyVoice3-0.5B-2512 API (zero_shot模式)
 
-## 开发说明
+## 常见问题
 
-### 音频转换
+### Q: ASR 连接失败？
 
-`AudioConverter` 类负责将各种格式的音频转换为模型所需的 WAV 格式：
-- 采样率: 16kHz
-- 声道: 单声道
-- 编码: 16bit PCM
+A: 检查 ASR 服务是否启动，以及 `config.py` 中的 URI 配置是否正确。
 
-### API 集成
+### Q: 如何切换 ASR 后端？
 
-`VoiceTTSGenerator` 类实现了 Fun-CosyVoice3-0.5B-2512 API 的 zero_shot 模式调用：
+A: 修改 `config.py` 中的 `ASR_BACKEND_TYPE` 和 `ASR_BACKEND_CONFIG`。
 
-- **tts_text**: 用户输入的要合成的文本
-- **prompt_wav**: 用户上传的参考音频文件
-- **prompt_text**: 配置的默认提示文本（可在config.py中修改）
+### Q: 识别结果为空？
 
-API配置在 [config.py](config.py) 文件中完成，用户在前端页面无感知。
+A: 检查音频质量、格式，以及 ASR 服务日志。
 
-### 样式自定义
+## 支持
 
-界面样式通过内联 CSS 定义，可以根据需要在 [app.py](app.py#L109) 中的 `custom_css` 变量中进行修改。
-
-## 许可证
-
-本项目仅供学习和研究使用。
-
-## 联系方式
-
-如有问题或建议，请通过项目 Issues 反馈。
+- 详细文档: [ASR_README.md](ASR_README.md)
+- 问题反馈: 项目 Issues

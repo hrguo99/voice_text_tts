@@ -12,7 +12,7 @@ import wave
 import json
 from typing import Optional, Tuple
 from ffmpy import FFmpeg
-from config import API_HOST, API_PORT, API_MODE, PROMPT_TEXT, ASR_ENABLED, ASR_URI
+from config import API_HOST, API_PORT, API_MODE, PROMPT_TEXT, ASR_ENABLED, ASR_BACKEND_TYPE, ASR_BACKEND_CONFIG, MAX_TEXT_LENGTH
 from asr_client import transcribe_audio_sync
 
 
@@ -115,21 +115,31 @@ def create_interface() -> gr.Blocks:
                             gr.Markdown("### 参考音频文本", elem_classes=["module-title"])
                             prompt_audio_text = gr.Textbox(
                                 label="参考音频文本内容 *",
-                                placeholder="请输入上传的参考音频对应的文字内容，或点击下方按钮提取",
+                                placeholder="请输入上传的参考音频对应的文字内容",
                                 lines=6,
                                 max_lines=6
                             )
 
                             # 按钮行
                             with gr.Row():
-                                # ASR提取按钮
-                                asr_btn = gr.Button(
-                                    "提取音频文字",
-                                    variant="primary",
-                                    size="sm",
-                                    scale=3,
-                                    elem_classes=["generate-button-full-width"]
-                                )
+                                # ASR提取按钮（根据配置显示/隐藏）
+                                if ASR_ENABLED:
+                                    asr_btn = gr.Button(
+                                        "提取音频文字",
+                                        variant="primary",
+                                        size="sm",
+                                        scale=3,
+                                        elem_classes=["generate-button-full-width"]
+                                    )
+                                else:
+                                    asr_btn = gr.Button(
+                                        "提取音频文字",
+                                        variant="primary",
+                                        size="sm",
+                                        scale=3,
+                                        elem_classes=["generate-button-full-width"],
+                                        visible=False
+                                    )
                                 # 清空按钮
                                 clear_btn = gr.Button(
                                     "清空",
@@ -153,11 +163,20 @@ def create_interface() -> gr.Blocks:
                                 max_lines=12
                             )
 
+                            # 清空按钮
+                            clear_text_btn = gr.Button(
+                                "清空",
+                                variant="primary",
+                                size="sm",
+                                elem_classes=["generate-button-full-width"]
+                            )
+
                         with gr.Column(scale=1):
-                            # 使用说明
+                            # 使用说明（根据ASR配置显示不同内容）
                             gr.Markdown("### 使用说明", elem_classes=["module-title"])
-                            gr.Markdown(
-                                """
+
+                            if ASR_ENABLED:
+                                instructions_text = """
                                 **步骤说明：**
                                 1. 参考音频 - 选择上传音频文件或使用麦克风录制
                                 2. 参考音频文本 - 【必填】手动输入文字内容，或点击"提取音频文字"按钮自动识别
@@ -166,17 +185,31 @@ def create_interface() -> gr.Blocks:
 
                                 **使用方式：**
                                 - **方式一（手动输入）**: 直接在参考音频文本框输入对应的文字内容
-                                - **方式二（ASR提取）**: 上传/录制音频后，点击"提取音频文字"按钮自动识别，识别后可手动修改
+                                - **方式二（ASR提取）**: 上传/录制音频后，点击"提取音频文字"按钮自动识别
 
                                 **注意事项：**
                                 1. 参考音频建议使用清晰、无背景噪音的语音
                                 2. 参考音频文本将自动与系统提示词拼接，帮助AI更好地学习声音特征
                                 3. ASR识别后，您可以查看并修改识别结果
-                                4. 文本长度建议在 1000 字符以内
+                                4. 文本长度建议在 {} 字符以内
                                 5. 支持的音频格式: WAV, MP3, M4A
-                                """,
-                                elem_classes=["instructions"]
-                            )
+                                """.format(MAX_TEXT_LENGTH)
+                            else:
+                                instructions_text = """
+                                **步骤说明：**
+                                1. 参考音频 - 选择上传音频文件或使用麦克风录制
+                                2. 参考音频文本 - 【必填】手动输入参考音频对应的文字内容
+                                3. 输入文本 - 在文本框中输入要合成的文字内容
+                                4. 生成语音 - 点击"生成语音"按钮开始合成
+
+                                **注意事项：**
+                                1. 参考音频建议使用清晰、无背景噪音的语音
+                                2. 参考音频文本将自动与系统提示词拼接，帮助AI更好地学习声音特征
+                                3. 文本长度建议在 {} 字符以内
+                                4. 支持的音频格式: WAV, MP3, M4A
+                                """.format(MAX_TEXT_LENGTH)
+
+                            gr.Markdown(instructions_text, elem_classes=["instructions"])
 
                     # 步骤4: 生成按钮
                     generate_btn = gr.Button(
@@ -288,11 +321,6 @@ def create_interface() -> gr.Blocks:
             PROGRESS_CONVERTING = 96
             PROGRESS_SAVING = 98
             PROGRESS_DONE = 100
-
-            # ASR识别进度常量
-            PROGRESS_ASR_START = 1
-            PROGRESS_ASR_CONNECTING = 2
-            PROGRESS_ASR_TRANSCRIBING = 3
 
             # 步骤1: 验证输入（显示进度条）
             yield _update_progress(PROGRESS_INITIAL, f"生成进度 {PROGRESS_INITIAL:.2f}%"), gr.update(visible=False), gr.update(visible=False)
@@ -540,39 +568,29 @@ def create_interface() -> gr.Blocks:
 
         # ASR提取按钮处理函数
         def handle_asr_extract(audio_upload_file, audio_mic_file):
-            """
-            处理ASR音频文字提取
-
-            Args:
-                audio_upload_file: 上传的音频文件
-                audio_mic_file: 录制的音频文件
-
-            Returns:
-                str: 提取的文本，失败时返回提示信息
-            """
-            # 优先使用上传的音频，如果没有则使用录制的音频
+            """处理ASR音频文字提取"""
             reference_audio = audio_upload_file or audio_mic_file
 
             if not reference_audio:
                 return "错误：请先上传或录制参考音频"
 
             if not ASR_ENABLED:
-                return "错误：ASR功能未启用，请在config.py中启用"
+                return "错误：ASR功能未启用。请在 config.py 中设置 ASR_ENABLED = True 来启用此功能。"
 
             try:
-                # 调用ASR服务识别音频
                 import logging
-                logging.info(f"开始ASR识别: {reference_audio}")
+                logging.info(f"开始ASR识别: {reference_audio}, 后端: {ASR_BACKEND_TYPE}")
 
+                backend_config = ASR_BACKEND_CONFIG.get(ASR_BACKEND_TYPE, {})
                 result = transcribe_audio_sync(
                     reference_audio,
-                    asr_uri=ASR_URI
+                    backend_type=ASR_BACKEND_TYPE,
+                    **backend_config
                 )
 
                 if result and result.strip():
-                    text = result.strip()
-                    logging.info(f"ASR识别成功: {text[:50]}...")
-                    return text
+                    logging.info(f"ASR识别成功: {result[:50]}...")
+                    return result.strip()
                 else:
                     logging.warning("ASR识别返回空结果")
                     return "识别失败：ASR服务返回空结果，请检查音频质量或ASR服务状态。您可以手动输入参考音频文本。"
@@ -592,6 +610,12 @@ def create_interface() -> gr.Blocks:
         clear_btn.click(
             fn=lambda: "",
             outputs=[prompt_audio_text]
+        )
+
+        # 绑定清空文本按钮事件
+        clear_text_btn.click(
+            fn=lambda: "",
+            outputs=[text_input]
         )
 
         # 绑定生成按钮事件
@@ -1046,23 +1070,6 @@ def main():
     .generate-button-full-width {
         color: #ffffff !important;
         font-weight: 700 !important;
-    }
-
-    /* ASR状态提示样式 */
-    .asr-status {
-        margin-top: 8px !important;
-        padding: 12px 16px !important;
-        background-color: #f0f4f8 !important;
-        border-left: 4px solid #667eea !important;
-        border-radius: 4px !important;
-        font-size: 14px !important;
-        line-height: 1.6 !important;
-    }
-
-    .asr-status h3 {
-        margin: 0 0 8px 0 !important;
-        font-size: 16px !important;
-        color: #0f3460 !important;
     }
 
     /* 错误消息样式 */
