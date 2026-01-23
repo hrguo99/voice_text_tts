@@ -319,6 +319,12 @@ def create_interface() -> gr.Blocks:
             except FileNotFoundError:
                 yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 找不到音频文件 {reference_audio}")
                 return
+            except requests.exceptions.ConnectTimeout as e:
+                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 连接API超时 - 服务端未响应，请检查API服务是否运行\n\n错误详情: {str(e)}")
+                return
+            except requests.exceptions.ReadTimeout as e:
+                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 生成超时 - 文本过长或服务端处理时间过长（超过300秒）\n\n建议：\n1. 缩短文本长度\n2. 检查服务端性能\n\n错误详情: {str(e)}")
+                return
             except requests.exceptions.ConnectionError as e:
                 yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 连接API失败 - {str(e)}")
                 return
@@ -389,8 +395,15 @@ def create_interface() -> gr.Blocks:
 
                                 buffer = buffer[audio_data_end:]
 
-                                # 处理开始标记（服务端开始生成）
-                                if metadata['chunk_index'] == -1 and metadata.get('status') == 'generating':
+                                # 处理初始化标记（服务端正在初始化模型）
+                                if metadata['chunk_index'] == -1 and metadata.get('status') == 'initializing':
+                                    yield _update_progress(PROGRESS_REQUEST_SENT, f"初始化模型 {PROGRESS_REQUEST_SENT:.2f}%"), gr.update(visible=False), gr.update(visible=False)
+                                    continue
+
+                                # 处理生成开始标记（模型初始化完成，开始生成音频）
+                                if metadata['chunk_index'] == -2 and metadata.get('status') == 'generating':
+                                    init_time = metadata.get('init_time', 0)
+                                    yield _update_progress(PROGRESS_REQUEST_SENT + 1, f"生成音频中 {PROGRESS_REQUEST_SENT + 1:.2f}% (初始化耗时: {init_time:.2f}s)"), gr.update(visible=False), gr.update(visible=False)
                                     continue
 
                                 # 第一次接收到实际音频数据
@@ -413,7 +426,27 @@ def create_interface() -> gr.Blocks:
                                 total_chunks = metadata.get('total_chunks', -1)
                                 server_progress = metadata.get('progress', -1)
 
-                                if total_chunks > 0 and server_progress >= 0:
+                                # 检查是否有 sub-chunk 信息（二次分块）
+                                sub_chunk_index = metadata.get('sub_chunk_index')
+                                sub_chunk_total = metadata.get('sub_chunk_total')
+                                chunk_index = metadata.get('chunk_index', 0)
+
+                                if sub_chunk_index is not None and sub_chunk_total is not None:
+                                    # 使用 sub-chunk 信息计算进度（更细粒度）
+                                    has_server_progress = True
+                                    # 基于 sub-chunk 的进度：已经完成了的 chunk + 当前 chunk 的 sub-chunk 进度
+                                    sub_chunk_progress = (sub_chunk_index + 1) / sub_chunk_total
+                                    # 假设总共有 5 个大 chunk（估算），可以调整这个值
+                                    estimated_total_chunks = max(5, chunk_index + 2)
+                                    server_total_progress = PROGRESS_FIRST_CHUNK + (chunk_index + sub_chunk_progress) / estimated_total_chunks * (PROGRESS_RECEIVING_DONE - PROGRESS_FIRST_CHUNK)
+                                    server_total_progress = min(PROGRESS_RECEIVING_DONE - 1, server_total_progress)
+
+                                    # 每 2% 或最后一个 sub-chunk 时更新（更频繁）
+                                    if abs(server_total_progress - last_progress) >= 2 or metadata.get('is_last_sub_chunk'):
+                                        yield _update_progress(server_total_progress, f"生成进度 {server_total_progress:.2f}%"), gr.update(visible=False), gr.update(visible=False)
+                                        last_progress = server_total_progress
+
+                                elif total_chunks > 0 and server_progress >= 0:
                                     # 服务端提供了准确的进度信息，使用服务端进度并禁用时间估算
                                     has_server_progress = True
                                     server_total_progress = 10 + (server_progress / 100) * 85
@@ -431,6 +464,13 @@ def create_interface() -> gr.Blocks:
                     if len(tts_audio) == 0:
                         yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 接收数据时连接中断")
                         return
+                except requests.exceptions.Timeout as e:
+                    if len(tts_audio) == 0:
+                        yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 接收数据超时 - 生成时间过长\n\n建议缩短文本长度或增加服务端性能")
+                        return
+                    else:
+                        # 如果已经接收到部分数据，仍然尝试处理
+                        yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ⚠️ 接收数据超时，但已接收 {len(tts_audio)} 字节，尝试处理...")
                 except Exception as e:
                     if len(tts_audio) == 0:
                         yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 接收音频数据失败 - {str(e)}")
