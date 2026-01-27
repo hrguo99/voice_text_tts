@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  voice-text-tts:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: voice_text_tts_app
+    ports:
+      - "${SERVER_PORT:-7862}:7862"
+    environment:
+      # API配置
+      - API_HOST=${API_HOST:-127.0.0.1}
+      - API_PORT=${API_PORT:-50000}
+      - API_MODE=${API_MODE:-zero_shot}
+
+      # Prompt配置
+      - PROMPT_TEXT=${PROMPT_TEXT:-You are a helpful assistant.<|endofprompt|>}
+
+      # 服务器配置
+      - SERVER_NAME=0.0.0.0
+      - SERVER_PORT=${SERVER_PORT:-7862}
+
+      # 文本限制
+      - MAX_TEXT_LENGTH=${MAX_TEXT_LENGTH:-1000}
+
+      # ASR配置
+      - ASR_ENABLED=${ASR_ENABLED:-false}
+      - ASR_BACKEND_TYPE=${ASR_BACKEND_TYPE:-funasr}
+
+      # ASR WebSocket配置
+      - ASR_FUNASR_URI=${ASR_FUNASR_URI:-ws://localhost:10095/ws}
+      - ASR_FUNASR_MODE=${ASR_FUNASR_MODE:-2pass-offline}
+      - ASR_FUNASR_CHUNK_SIZE=${ASR_FUNASR_CHUNK_SIZE:-[5, 10, 5]}
+      - ASR_FUNASR_CHUNK_INTERVAL=${ASR_FUNASR_CHUNK_INTERVAL:-10}
+      - ASR_FUNASR_ENCODER_CHUNK_LOOK_BACK=${ASR_FUNASR_ENCODER_CHUNK_LOOK_BACK:-4}
+      - ASR_FUNASR_DECODER_CHUNK_LOOK_BACK=${ASR_FUNASR_DECODER_CHUNK_LOOK_BACK:-0}
+      - ASR_FUNASR_HOTWORDS=${ASR_FUNASR_HOTWORDS:-{}}
+      - ASR_FUNASR_USE_ITN=${ASR_FUNASR_USE_ITN:-true}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://0.0.0.0:7862', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - voice_tts_network
+
+networks:
+  voice_tts_network:
+    driver: bridge

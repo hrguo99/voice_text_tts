@@ -1,0 +1,23 @@
+# 语音生成功能 - Python依赖包
+# Python 3.12
+
+# Gradio界面框架（使用 5.x 版本，修复了 gradio_client TypeError bug）
+gradio>=5.0.0,<6.0.0
+
+# Hugging Face Hub（版本兼容）
+huggingface_hub>=0.23.0
+
+# 音频处理
+numpy>=1.24.0
+ffmpeg-python>=0.2.0
+pydub>=0.25.0
+ffmpy>=0.3.0
+
+# HTTP请求（用于API调用）
+requests>=2.31.0
+
+# 进度条显示
+tqdm>=4.66.0
+
+# WebSocket（用于ASR功能）
+websockets>=12.0
