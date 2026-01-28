@@ -10,9 +10,11 @@ import tempfile
 import requests
 import wave
 import json
-from typing import Optional, Tuple
+import shutil
+from datetime import datetime
+from typing import Optional, Tuple, List, Dict
 from ffmpy import FFmpeg
-from config import API_HOST, API_PORT, API_MODE, PROMPT_TEXT, ASR_ENABLED, ASR_BACKEND_TYPE, ASR_BACKEND_CONFIG, MAX_TEXT_LENGTH, SERVER_NAME, SERVER_PORT
+from config import API_HOST, API_PORT, API_MODE, PROMPT_TEXT, ASR_ENABLED, ASR_BACKEND_TYPE, ASR_BACKEND_CONFIG, MAX_TEXT_LENGTH, SERVER_NAME, SERVER_PORT, PRESETS_DIR
 from asr_client import transcribe_audio_sync
 
 
@@ -62,6 +64,146 @@ class AudioConverter:
             return input_path
 
 
+class VoicePresetManager:
+    """音色预设管理器"""
+
+    def __init__(self):
+        """初始化预设管理器"""
+        # 确定预设保存目录
+        if PRESETS_DIR:
+            # 使用配置文件中指定的路径
+            self.presets_dir = PRESETS_DIR
+        else:
+            # 使用系统临时目录
+            self.presets_dir = os.path.join(tempfile.gettempdir(), 'voice_presets')
+
+        # 创建预设目录和音频文件目录
+        os.makedirs(self.presets_dir, exist_ok=True)
+        self.presets_file = os.path.join(self.presets_dir, 'presets.json')
+        self.audio_dir = os.path.join(self.presets_dir, 'audio_files')
+        os.makedirs(self.audio_dir, exist_ok=True)
+
+        print(f"预设保存路径: {self.presets_dir}")  # 打印预设保存路径，方便调试
+        self.presets = self._load_presets()
+
+    def _load_presets(self) -> List[Dict]:
+        """从文件加载预设"""
+        if os.path.exists(self.presets_file):
+            try:
+                with open(self.presets_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"加载预设失败: {e}")
+                return []
+        return []
+
+    def _save_presets(self):
+        """保存预设到文件"""
+        try:
+            with open(self.presets_file, 'w', encoding='utf-8') as f:
+                json.dump(self.presets, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"保存预设失败: {e}")
+
+    def add_preset(self, name: str, audio_path: str, prompt_text: str) -> Dict:
+        """添加新的音色预设
+
+        Args:
+            name: 预设名称
+            audio_path: 音频文件路径
+            prompt_text: 参考音频文本
+
+        Returns:
+            新创建的预设字典
+        """
+        # 生成唯一ID
+        preset_id = f"preset_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+        # 复制音频文件到预设目录
+        audio_ext = os.path.splitext(audio_path)[1]
+        saved_audio_path = os.path.join(self.audio_dir, f"{preset_id}{audio_ext}")
+
+        try:
+            shutil.copy2(audio_path, saved_audio_path)
+        except Exception as e:
+            print(f"复制音频文件失败: {e}")
+            return None
+
+        # 创建预设
+        preset = {
+            'id': preset_id,
+            'name': name,
+            'audio_path': saved_audio_path,
+            'prompt_text': prompt_text,
+            'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+
+        self.presets.append(preset)
+        self._save_presets()
+
+        return preset
+
+    def delete_preset(self, preset_id: str) -> bool:
+        """删除预设
+
+        Args:
+            preset_id: 预设ID
+
+        Returns:
+            是否删除成功
+        """
+        # 查找预设
+        preset = next((p for p in self.presets if p['id'] == preset_id), None)
+        if not preset:
+            return False
+
+        # 删除音频文件
+        try:
+            if os.path.exists(preset['audio_path']):
+                os.remove(preset['audio_path'])
+        except Exception as e:
+            print(f"删除音频文件失败: {e}")
+
+        # 从列表中移除
+        self.presets = [p for p in self.presets if p['id'] != preset_id]
+        self._save_presets()
+
+        return True
+
+    def get_presets(self) -> List[Dict]:
+        """获取所有预设"""
+        return self.presets.copy()
+
+    def get_preset(self, preset_id: str) -> Optional[Dict]:
+        """根据ID获取预设"""
+        return next((p for p in self.presets if p['id'] == preset_id), None)
+
+    def get_presets_display(self) -> str:
+        """获取预设的显示文本（用于gradio显示）"""
+        if not self.presets:
+            return "暂无保存的音色预设"
+
+        display_lines = []
+        for i, preset in enumerate(self.presets, 1):
+            display_lines.append(
+                f"{i}. **{preset['name']}** ({preset['created_at']})\n"
+                f"   文本: {preset['prompt_text'][:50]}{'...' if len(preset['prompt_text']) > 50 else ''}\n"
+            )
+
+        return "\n".join(display_lines)
+
+    def get_preset_choices(self) -> List[str]:
+        """获取预设选择列表（用于gradio下拉框）"""
+        if not self.presets:
+            return []
+
+        return [f"{p['name']} ({p['created_at']})" for p in self.presets]
+
+
+# 创建全局预设管理器实例
+preset_manager = VoicePresetManager()
+
+
 def create_interface() -> gr.Blocks:
     """创建Gradio界面"""
 
@@ -76,7 +218,7 @@ def create_interface() -> gr.Blocks:
                 elem_classes=["app-title"]
             )
 
-            # 步骤指示器 - 横向显示所有步骤
+            # 步骤指示器 - 横向显示所有步骤（3步）
             with gr.Row(elem_classes=["steps-nav"]):
                 step1_indicator = gr.Markdown(
                     '<div class="step-item active"><span class="step-number">1</span><span class="step-label">上传参考音频</span></div>',
@@ -87,11 +229,7 @@ def create_interface() -> gr.Blocks:
                     elem_classes=["step-nav-item"]
                 )
                 step3_indicator = gr.Markdown(
-                    '<div class="step-item"><span class="step-number">3</span><span class="step-label">输入合成文本</span></div>',
-                    elem_classes=["step-nav-item"]
-                )
-                step4_indicator = gr.Markdown(
-                    '<div class="step-item"><span class="step-number">4</span><span class="step-label">生成语音</span></div>',
+                    '<div class="step-item"><span class="step-number">3</span><span class="step-label">生成语音</span></div>',
                     elem_classes=["step-nav-item"]
                 )
 
@@ -136,6 +274,47 @@ def create_interface() -> gr.Blocks:
                 - 裁剪完成后点击播放器右下角"Trim"，然后点击"下一步"继续
                 - 建议使用清晰、无背景噪音的语音
                 """, elem_classes=["instructions"])
+
+                # 音色预设区域
+                # 标题（始终创建，但根据预设状态设置可见性）
+                preset_title = gr.Markdown("### 已保存的音色预设", elem_classes=["module-title"], visible=False)
+
+                # 预设列表
+                with gr.Row() as preset_list_row:
+                    preset_list = gr.Markdown(
+                        "",
+                        elem_classes=["preset-list"],
+                        visible=False
+                    )
+
+                # 下拉框和按钮
+                with gr.Row() as preset_control_row:
+                    load_preset_dropdown = gr.Dropdown(
+                        label="选择音色预设",
+                        choices=[],
+                        value=None,
+                        interactive=True,
+                        scale=2,
+                        visible=False
+                    )
+                    load_preset_btn = gr.Button("加载预设", variant="primary", size="sm", scale=1, visible=False)
+                    delete_preset_btn = gr.Button("删除预设", variant="stop", size="sm", scale=1, visible=False)
+
+                # 状态消息和分隔符
+                preset_load_status = gr.Markdown("", visible=False, elem_classes=["instructions"])
+                preset_divider = gr.Markdown("---", elem_classes=["divider"], visible=False)
+
+                # 如果启动时有预设，显示预设区域
+                if preset_manager.get_presets():
+                    preset_title.value = "### 已保存的音色预设"
+                    preset_title.visible = True
+                    preset_list.value = preset_manager.get_presets_display()
+                    preset_list.visible = True
+                    load_preset_dropdown.choices = preset_manager.get_preset_choices()
+                    load_preset_dropdown.visible = True
+                    load_preset_btn.visible = True
+                    delete_preset_btn.visible = True
+                    preset_divider.visible = True
 
                 # 导航按钮
                 with gr.Row(elem_classes=["nav-buttons"]):
@@ -204,54 +383,58 @@ def create_interface() -> gr.Blocks:
                     """
                 gr.Markdown(step2_info, elem_classes=["instructions"])
 
+                # 保存预设区域
+                gr.Markdown("---", elem_classes=["divider"])
+                gr.Markdown("### 保存当前音色为预设", elem_classes=["module-title"])
+                with gr.Row():
+                    preset_name_input = gr.Textbox(
+                        label="预设名称（可选）",
+                        placeholder="不填则使用默认名称",
+                        scale=2,
+                        max_lines=1
+                    )
+                    save_preset_btn = gr.Button("保存预设", variant="primary", size="sm", scale=1)
+                preset_save_status = gr.Markdown("", visible=False, elem_classes=["instructions"])
+                gr.Markdown("""
+**提示：**
+- 保存后可在步骤1快速加载此音色预设
+""", elem_classes=["instructions"])
+
                 # 导航按钮
                 with gr.Row(elem_classes=["nav-buttons"]):
                     step2_prev = gr.Button("上一步", variant="secondary", size="lg")
                     step2_next = gr.Button("下一步", variant="primary", size="lg", interactive=False)
 
-            # ==================== 步骤3：输入要合成的文本 ====================
+            # ==================== 步骤3：输入文本并生成语音 ====================
             with gr.Column(visible=False, elem_classes=["step-container"]) as step3_container:
-                gr.Markdown("### 请输入要合成的文字内容", elem_classes=["step-title"])
+                gr.Markdown("### 请输入要合成的文字内容并生成语音", elem_classes=["step-title"])
 
                 # 已完成的步骤摘要
-                step3_summary = gr.Markdown("", elem_classes=["summary-text", "step3-summary"])
+                step3_summary = gr.Markdown("", elem_classes=["summary-text", "step3-summary"], visible=False)
 
-                # 输入文本
-                text_input = gr.Textbox(
-                    label=f"输入文本（建议{MAX_TEXT_LENGTH}字符以内）",
-                    placeholder="请输入要合成的文字内容",
-                    lines=8,
-                    max_lines=15
-                )
+                # 输入文本区域
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        text_input = gr.Textbox(
+                            label=f"输入文本（建议{MAX_TEXT_LENGTH}字符以内）",
+                            placeholder="请输入要合成的文字内容",
+                            lines=10,
+                            max_lines=15
+                        )
 
-                clear_text_btn = gr.Button("清空", variant="secondary", size="sm")
+                        # 清空和生成按钮行
+                        with gr.Row():
+                            clear_text_btn = gr.Button("清空文本", variant="secondary", size="sm")
+                            generate_btn = gr.Button("生成语音", variant="primary", size="lg", scale=2, interactive=False)
 
                 # 说明
                 gr.Markdown(f"""
                 **提示：**
                 - 文本长度建议在 {MAX_TEXT_LENGTH} 字符以内
-                - 输入完成后，点击"下一步"进入生成步骤
+                - 点击"生成语音"按钮开始生成
+                - 生成完成后，可以继续输入新的文本并再次生成，无需重新上传参考音频
+                - 点击"重新开始"可以更换参考音频
                 """, elem_classes=["instructions"])
-
-                # 导航按钮
-                with gr.Row(elem_classes=["nav-buttons"]):
-                    step3_prev = gr.Button("上一步", variant="secondary", size="lg")
-                    step3_next = gr.Button("下一步", variant="primary", size="lg", interactive=False)
-
-            # ==================== 步骤4：生成语音 ====================
-            with gr.Column(visible=False, elem_classes=["step-container"]) as step4_container:
-                gr.Markdown("### 生成语音", elem_classes=["step-title"])
-
-                # 所有输入的摘要
-                step4_summary = gr.Markdown("", elem_classes=["summary-text", "step4-summary"])
-
-                # 生成按钮
-                generate_btn = gr.Button(
-                    "生成语音",
-                    variant="primary",
-                    size="lg",
-                    elem_classes=["generate-button-large"]
-                )
 
                 # 进度条（默认隐藏）
                 progress_bar = gr.Slider(
@@ -274,7 +457,7 @@ def create_interface() -> gr.Blocks:
                         label="生成的语音",
                         type="filepath",
                         interactive=False,
-                        visible=True,
+                        visible=False,
                         waveform_options=gr.WaveformOptions(
                             waveform_color="#10b981",
                             waveform_progress_color="#059669"
@@ -290,43 +473,67 @@ def create_interface() -> gr.Blocks:
 
                 # 导航按钮
                 with gr.Row(elem_classes=["nav-buttons"]):
-                    step4_prev = gr.Button("上一步", variant="secondary", size="lg")
-                    step4_restart = gr.Button("重新开始", variant="secondary", size="lg")
+                    step3_prev = gr.Button("上一步", variant="secondary", size="lg")
+                    step3_restart = gr.Button("重新开始", variant="secondary", size="lg")
 
         # ==================== 事件处理函数 ====================
 
         # 步骤导航函数
         def go_to_step1():
             """返回步骤1"""
-            return (
+            has_presets = preset_manager.get_presets()
+
+            updates = [
                 gr.update(value='<div class="step-item active"><span class="step-number">1</span><span class="step-label">上传参考音频</span></div>'),  # step1_indicator
                 gr.update(value='<div class="step-item"><span class="step-number">2</span><span class="step-label">输入音频文本</span></div>'),  # step2_indicator
-                gr.update(value='<div class="step-item"><span class="step-number">3</span><span class="step-label">输入合成文本</span></div>'),  # step3_indicator
-                gr.update(value='<div class="step-item"><span class="step-number">4</span><span class="step-label">生成语音</span></div>'),  # step4_indicator
+                gr.update(value='<div class="step-item"><span class="step-number">3</span><span class="step-label">生成语音</span></div>'),  # step3_indicator
                 gr.update(visible=True),   # step1_container
                 gr.update(visible=False),  # step2_container
                 gr.update(visible=False),  # step3_container
-                gr.update(visible=False),  # step4_container
-                gr.update(value=""),       # step3_summary (清空)
-                gr.update(value=""),       # step4_summary (清空)
-            )
+                gr.update(value="", visible=False),  # step3_summary (清空并隐藏)
+                gr.update(value=None),     # output_audio (清空)
+                gr.update(visible=False),  # output_error
+                gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar
+                gr.update(visible=False, value=""),  # audio_trim_warning (隐藏警告框)
+                gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
+                # 预设相关组件
+                gr.update(value=preset_manager.get_presets_display() if has_presets else "", visible=has_presets),  # preset_list
+                gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], visible=has_presets),  # load_preset_dropdown
+                gr.update(visible=has_presets),  # load_preset_btn
+                gr.update(visible=has_presets),  # delete_preset_btn
+                gr.update(visible=False, value=""),  # preset_load_status
+                gr.update(visible=has_presets),  # preset_title
+                gr.update(visible=has_presets),  # preset_divider
+            ]
+
+            return tuple(updates)
 
         def go_to_step2(audio_upload_file, audio_mic_file):
             """进入步骤2"""
             reference_audio = audio_upload_file or audio_mic_file
-            return (
+
+            # 基础更新列表
+            updates = [
                 gr.update(value='<div class="step-item completed"><span class="step-number">1</span><span class="step-label">上传参考音频</span></div>'),  # step1_indicator
                 gr.update(value='<div class="step-item active"><span class="step-number">2</span><span class="step-label">输入音频文本</span></div>'),  # step2_indicator
-                gr.update(value='<div class="step-item"><span class="step-number">3</span><span class="step-label">输入合成文本</span></div>'),  # step3_indicator
-                gr.update(value='<div class="step-item"><span class="step-number">4</span><span class="step-label">生成语音</span></div>'),  # step4_indicator
+                gr.update(value='<div class="step-item"><span class="step-number">3</span><span class="step-label">生成语音</span></div>'),  # step3_indicator
                 gr.update(visible=False),  # step1_container
                 gr.update(visible=True),   # step2_container
                 gr.update(visible=False),  # step3_container
-                gr.update(visible=False),  # step4_container
                 gr.update(value=reference_audio),  # step2_audio_display
-                gr.update(value=""),       # step3_summary (清空)
-                gr.update(value=""),       # step4_summary (清空)
-            )
+                gr.update(value="", visible=False),  # step3_summary (清空并隐藏)
+                gr.update(value=None),     # output_audio (清空)
+                gr.update(visible=False),  # output_error
+                gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar
+                gr.update(visible=False, value=""),  # audio_trim_warning (隐藏警告框)
+                gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
+            ]
+
+            # 如果有预设，添加预设加载状态的更新
+            if preset_manager.get_presets():
+                updates.append(gr.update(visible=False, value=""))  # preset_load_status
+
+            return tuple(updates)
 
         def go_to_step3(audio_upload_file, audio_mic_file, prompt_text):
             """进入步骤3"""
@@ -334,55 +541,34 @@ def create_interface() -> gr.Blocks:
             audio_name = reference_audio.split("/")[-1] if reference_audio else "未知"
 
             summary = f"""
-**已完成的步骤：**
+**参考信息：**
 
 **✓ 已上传参考音频：** {audio_name}
 
 **✓ 参考音频文本：** {prompt_text[:100]}{"..." if len(prompt_text) > 100 else ""}
             """
 
-            return (
+            # 基础更新列表
+            updates = [
                 gr.update(value='<div class="step-item completed"><span class="step-number">1</span><span class="step-label">上传参考音频</span></div>'),  # step1_indicator
                 gr.update(value='<div class="step-item completed"><span class="step-number">2</span><span class="step-label">输入音频文本</span></div>'),  # step2_indicator
-                gr.update(value='<div class="step-item active"><span class="step-number">3</span><span class="step-label">输入合成文本</span></div>'),  # step3_indicator
-                gr.update(value='<div class="step-item"><span class="step-number">4</span><span class="step-label">生成语音</span></div>'),  # step4_indicator
+                gr.update(value='<div class="step-item active"><span class="step-number">3</span><span class="step-label">生成语音</span></div>'),  # step3_indicator
                 gr.update(visible=False),  # step1_container
                 gr.update(visible=False),  # step2_container
                 gr.update(visible=True),   # step3_container
-                gr.update(visible=False),  # step4_container
-                gr.update(value=summary),  # step3_summary
-                gr.update(value=""),       # step4_summary (清空)
-            )
-
-        def go_to_step4(audio_upload_file, audio_mic_file, prompt_text, text):
-            """进入步骤4"""
-            reference_audio = audio_upload_file or audio_mic_file
-            audio_name = reference_audio.split("/")[-1] if reference_audio else "未知"
-
-            summary = f"""
-**输入信息摘要：**
-
-**✓ 参考音频：** {audio_name}
-
-**✓ 参考音频文本：** {prompt_text[:100]}{"..." if len(prompt_text) > 100 else ""}
-
-**✓ 要合成的文本：** {text[:200]}{"..." if len(text) > 200 else ""}
-            """
-
-            return (
-                gr.update(value='<div class="step-item completed"><span class="step-number">1</span><span class="step-label">上传参考音频</span></div>'),  # step1_indicator
-                gr.update(value='<div class="step-item completed"><span class="step-number">2</span><span class="step-label">输入音频文本</span></div>'),  # step2_indicator
-                gr.update(value='<div class="step-item completed"><span class="step-number">3</span><span class="step-label">输入合成文本</span></div>'),  # step3_indicator
-                gr.update(value='<div class="step-item active"><span class="step-number">4</span><span class="step-label">生成语音</span></div>'),  # step4_indicator
-                gr.update(visible=False),  # step1_container
-                gr.update(visible=False),  # step2_container
-                gr.update(visible=False),  # step3_container
-                gr.update(visible=True),   # step4_container
-                gr.update(value=summary),  # step4_summary
+                gr.update(value=summary, visible=True),  # step3_summary (显示)
                 gr.update(value=None),     # output_audio (清空之前的输出)
                 gr.update(visible=False),  # output_error
-                gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar (隐藏并重置)
-            )
+                gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar
+                gr.update(visible=False, value=""),  # audio_trim_warning (隐藏警告框)
+                gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
+            ]
+
+            # 如果有预设，添加预设加载状态的更新
+            if preset_manager.get_presets():
+                updates.append(gr.update(visible=False, value=""))  # preset_load_status
+
+            return tuple(updates)
 
         # 输入验证函数
         def validate_step1(audio_upload_file, audio_mic_file):
@@ -433,10 +619,44 @@ def create_interface() -> gr.Blocks:
 **提示：** 选择音频中最清晰、最有代表性的片段进行裁剪"""
                     return gr.update(interactive=False), gr.update(visible=True, value=warning_text)
                 else:
-                    # 音频时长正常，不显示提示框
+                    # 音频时长正常，确保警告框隐藏
                     return gr.update(interactive=True), gr.update(visible=False, value="")
 
             return gr.update(interactive=True), gr.update(visible=False, value="")
+
+        def ensure_warning_hidden(audio_upload_file, audio_mic_file):
+            """确保警告框被隐藏（用于导航时强制隐藏）"""
+            return gr.update(visible=False, value="")
+
+        def go_back_to_step1(audio_upload_file, audio_mic_file):
+            """返回步骤1并更新预设列表"""
+            has_presets = preset_manager.get_presets()
+
+            base_updates = [
+                gr.update(value='<div class="step-item active"><span class="step-number">1</span><span class="step-label">上传参考音频</span></div>'),  # step1_indicator
+                gr.update(value='<div class="step-item"><span class="step-number">2</span><span class="step-label">输入音频文本</span></div>'),  # step2_indicator
+                gr.update(value='<div class="step-item"><span class="step-number">3</span><span class="step-label">生成语音</span></div>'),  # step3_indicator
+                gr.update(visible=True),   # step1_container
+                gr.update(visible=False),  # step2_container
+                gr.update(visible=False),  # step3_container
+                gr.update(value="", visible=False),  # step3_summary (清空并隐藏)
+                gr.update(value=None, visible=False),  # output_audio (清空并隐藏)
+                gr.update(value="", visible=False),    # output_error (清空并隐藏)
+                gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar (重置)
+                gr.update(visible=False, value=""),  # audio_trim_warning (强制隐藏警告框)
+                gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
+                gr.update(value=audio_upload_file),  # audio_upload (保持原值以触发change事件)
+                # 预设相关组件
+                gr.update(value=preset_manager.get_presets_display() if has_presets else "", visible=has_presets),  # preset_list
+                gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], visible=has_presets),  # load_preset_dropdown
+                gr.update(visible=has_presets),  # load_preset_btn
+                gr.update(visible=has_presets),  # delete_preset_btn
+                gr.update(visible=False, value=""),  # preset_load_status
+                gr.update(visible=has_presets),  # preset_title
+                gr.update(visible=has_presets),  # preset_divider
+            ]
+
+            return tuple(base_updates)
 
         def validate_step2(prompt_text):
             """验证步骤2：检查是否输入了参考音频文本"""
@@ -479,6 +699,155 @@ def create_interface() -> gr.Blocks:
             except Exception as e:
                 logging.error(f"ASR识别出错: {str(e)}")
                 return f"识别出错：{str(e)}\n\n建议：1. 检查ASR服务是否已启动 2. 检查音频文件格式 3. 查看控制台日志\n\n您可以手动输入参考音频文本。"
+
+        # 音色预设处理函数
+        def handle_save_preset(preset_name, audio_upload_file, audio_mic_file, prompt_text):
+            """保存音色预设"""
+            reference_audio = audio_upload_file or audio_mic_file
+
+            if not reference_audio:
+                return gr.update(value="❌ 请先上传或录制参考音频", visible=True)
+
+            if not prompt_text or not prompt_text.strip():
+                return gr.update(value="❌ 请先输入参考音频文本", visible=True)
+
+            # 使用自定义名称或默认名称
+            if not preset_name or not preset_name.strip():
+                preset_name = f"音色预设_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+            # 保存预设
+            preset = preset_manager.add_preset(preset_name.strip(), reference_audio, prompt_text.strip())
+
+            if preset:
+                return gr.update(value=f"✅ 音色预设 '{preset_name}' 保存成功！返回步骤1即可加载使用", visible=True)
+            else:
+                return gr.update(value="❌ 保存失败，请检查音频文件", visible=True)
+
+        def handle_load_preset_and_go(preset_choice):
+            """加载音色预设并直接跳转到步骤3"""
+            if not preset_choice:
+                return (
+                    gr.update(value="", visible=False),  # status message
+                    gr.update(interactive=False),  # generate_btn
+                )
+
+            # 从选择字符串中提取预设ID（格式：name (date)）
+            presets = preset_manager.get_presets()
+            # 找到匹配的预设
+            selected_preset = None
+            for preset in presets:
+                if f"{preset['name']} ({preset['created_at']})" == preset_choice:
+                    selected_preset = preset
+                    break
+
+            if not selected_preset:
+                return (
+                    gr.update(value="❌ 未找到选中的预设", visible=True),
+                    gr.update(interactive=False),
+                )
+
+            audio_name = selected_preset['audio_path'].split("/")[-1]
+            summary = f"""
+**参考信息：**
+
+**✓ 已加载音色预设：** {selected_preset['name']}
+
+**✓ 参考音频文本：** {selected_preset['prompt_text'][:100]}{"..." if len(selected_preset['prompt_text']) > 100 else ""}
+            """
+
+            return (
+                gr.update(value=f"✅ 已加载预设 '{selected_preset['name']}'，请输入要生成的文本", visible=True),
+                gr.update(value=summary, visible=True),  # step3_summary (设置值并显示)
+                selected_preset['audio_path'],
+                selected_preset['prompt_text'],
+                # 步骤指示器更新
+                gr.update(value='<div class="step-item completed"><span class="step-number">1</span><span class="step-label">上传参考音频</span></div>'),
+                gr.update(value='<div class="step-item completed"><span class="step-number">2</span><span class="step-label">输入音频文本</span></div>'),
+                gr.update(value='<div class="step-item active"><span class="step-number">3</span><span class="step-label">生成语音</span></div>'),
+                # 容器可见性
+                gr.update(visible=False),  # step1_container
+                gr.update(visible=False),  # step2_container
+                gr.update(visible=True),   # step3_container
+                # 其他组件
+                gr.update(value=None),     # output_audio
+                gr.update(visible=False),  # output_error
+                gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar
+                gr.update(visible=False, value=""),  # audio_trim_warning (隐藏警告框)
+                gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
+            )
+
+        def handle_delete_preset(preset_choice):
+            """删除音色预设"""
+            if not preset_choice:
+                has_presets = preset_manager.get_presets()
+                return (
+                    gr.update(value="❌ 请先选择要删除的预设", visible=True),  # preset_load_status
+                    gr.update(value=preset_manager.get_presets_display() if has_presets else "", visible=has_presets),  # preset_list
+                    gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], visible=has_presets),  # load_preset_dropdown
+                    gr.update(visible=has_presets),  # load_preset_btn
+                    gr.update(visible=has_presets),  # delete_preset_btn
+                    gr.update(visible=has_presets),  # preset_title
+                    gr.update(visible=has_presets),  # preset_divider
+                )
+
+            # 从选择字符串中提取预设ID（格式：name (date)）
+            presets = preset_manager.get_presets()
+            # 找到匹配的预设
+            selected_preset = None
+            for preset in presets:
+                if f"{preset['name']} ({preset['created_at']})" == preset_choice:
+                    selected_preset = preset
+                    break
+
+            if not selected_preset:
+                has_presets = preset_manager.get_presets()
+                return (
+                    gr.update(value="❌ 未找到选中的预设", visible=True),  # preset_load_status
+                    gr.update(value=preset_manager.get_presets_display() if has_presets else "", visible=has_presets),  # preset_list
+                    gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], visible=has_presets),  # load_preset_dropdown
+                    gr.update(visible=has_presets),  # load_preset_btn
+                    gr.update(visible=has_presets),  # delete_preset_btn
+                    gr.update(visible=has_presets),  # preset_title
+                    gr.update(visible=has_presets),  # preset_divider
+                )
+
+            # 删除预设
+            success = preset_manager.delete_preset(selected_preset['id'])
+
+            if success:
+                # 检查是否还有预设
+                if preset_manager.get_presets():
+                    return (
+                        gr.update(value=f"✅ 音色预设 '{selected_preset['name']}' 已删除", visible=True),  # preset_load_status
+                        gr.update(value=preset_manager.get_presets_display(), visible=True),  # preset_list
+                        gr.update(choices=preset_manager.get_preset_choices(), visible=True),  # load_preset_dropdown
+                        gr.update(visible=True),  # load_preset_btn
+                        gr.update(visible=True),  # delete_preset_btn
+                        gr.update(visible=True),  # preset_title
+                        gr.update(visible=True),  # preset_divider
+                    )
+                else:
+                    # 如果没有预设了，隐藏所有预设相关组件
+                    return (
+                        gr.update(value=f"✅ 音色预设 '{selected_preset['name']}' 已删除，当前没有保存的预设", visible=True),  # preset_load_status
+                        gr.update(value="", visible=False),  # preset_list
+                        gr.update(choices=[], value=None, visible=False),  # load_preset_dropdown
+                        gr.update(visible=False),  # load_preset_btn
+                        gr.update(visible=False),  # delete_preset_btn
+                        gr.update(visible=False),  # preset_title
+                        gr.update(visible=False),  # preset_divider
+                    )
+            else:
+                has_presets = preset_manager.get_presets()
+                return (
+                    gr.update(value=f"❌ 删除预设 '{selected_preset['name']}' 失败", visible=True),  # preset_load_status
+                    gr.update(value=preset_manager.get_presets_display() if has_presets else "", visible=has_presets),  # preset_list
+                    gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], visible=has_presets),  # load_preset_dropdown
+                    gr.update(visible=has_presets),  # load_preset_btn
+                    gr.update(visible=has_presets),  # delete_preset_btn
+                    gr.update(visible=has_presets),  # preset_title
+                    gr.update(visible=has_presets),  # preset_divider
+                )
 
         # 进度更新辅助函数
         def _calculate_time_progress(elapsed_time: float, received_first_chunk: bool) -> float:
@@ -802,7 +1171,7 @@ def create_interface() -> gr.Blocks:
                     with wave.open(output_path, 'wb') as wav_file:
                         wav_file.setnchannels(1)
                         wav_file.setsampwidth(2)
-                        wav_file.setframerate(22050)
+                        wav_file.setframerate(24000)
                         wav_file.writeframes(audio_array.tobytes())
                 except Exception as e:
                     yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 保存音频文件失败 - {str(e)}")
@@ -831,8 +1200,47 @@ def create_interface() -> gr.Blocks:
         step1_next.click(
             fn=go_to_step2,
             inputs=[audio_upload, audio_mic],
-            outputs=[step1_indicator, step2_indicator, step3_indicator, step4_indicator, step1_container, step2_container, step3_container, step4_container, step2_audio_display, step3_summary, step4_summary]
+            outputs=[step1_indicator, step2_indicator, step3_indicator, step1_container, step2_container, step3_container, step2_audio_display, step3_summary, output_audio, output_error, progress_bar, audio_trim_warning, preset_save_status]
         )
+
+        # 步骤1：加载预设按钮（如果有预设）
+        if preset_manager.get_presets():
+            load_preset_btn.click(
+                fn=handle_load_preset_and_go,
+                inputs=[load_preset_dropdown],
+                outputs=[
+                    preset_load_status,      # status message
+                    step3_summary,           # summary
+                    audio_upload,            # audio path (for internal use)
+                    prompt_audio_text,       # prompt text (for internal use)
+                    step1_indicator,         # step indicators
+                    step2_indicator,
+                    step3_indicator,
+                    step1_container,         # container visibility
+                    step2_container,
+                    step3_container,
+                    output_audio,
+                    output_error,
+                    progress_bar,
+                    audio_trim_warning,      # hide warning
+                    preset_save_status       # hide save status
+                ]
+            )
+
+            # 步骤1：删除预设按钮
+            delete_preset_btn.click(
+                fn=handle_delete_preset,
+                inputs=[load_preset_dropdown],
+                outputs=[
+                    preset_load_status,      # status message
+                    preset_list,             # update preset list display
+                    load_preset_dropdown,   # update dropdown choices
+                    load_preset_btn,        # update button visibility
+                    delete_preset_btn,      # update button visibility
+                    preset_title,           # update title visibility
+                    preset_divider          # update divider visibility
+                ]
+            )
 
         # 步骤2：ASR提取按钮
         asr_btn.click(
@@ -843,8 +1251,15 @@ def create_interface() -> gr.Blocks:
 
         # 步骤2：清空按钮
         clear_prompt_btn.click(
-            fn=lambda: "",
-            outputs=[prompt_audio_text]
+            fn=lambda: (gr.update(value=""), gr.update(value="")),
+            outputs=[prompt_audio_text, preset_name_input]
+        )
+
+        # 步骤2：音色预设保存按钮
+        save_preset_btn.click(
+            fn=handle_save_preset,
+            inputs=[preset_name_input, audio_upload, audio_mic, prompt_audio_text],
+            outputs=[preset_save_status]
         )
 
         # 步骤2：文本输入后启用"下一步"按钮
@@ -856,40 +1271,41 @@ def create_interface() -> gr.Blocks:
 
         # 步骤2：导航按钮
         step2_prev.click(
-            fn=lambda: (
-                gr.update(value='<div class="step-item active"><span class="step-number">1</span><span class="step-label">上传参考音频</span></div>'),
-                gr.update(value='<div class="step-item"><span class="step-number">2</span><span class="step-label">输入音频文本</span></div>'),
-                gr.update(value='<div class="step-item"><span class="step-number">3</span><span class="step-label">输入合成文本</span></div>'),
-                gr.update(value='<div class="step-item"><span class="step-number">4</span><span class="step-label">生成语音</span></div>'),
-                gr.update(visible=True),   # step1_container
-                gr.update(visible=False),  # step2_container
-                gr.update(visible=False),  # step3_container
-                gr.update(visible=False),  # step4_container
-                gr.update(value=""),       # step3_summary (清空)
-                gr.update(value=""),       # step4_summary (清空)
-                gr.update(value=None, visible=False),  # output_audio (清空并隐藏)
-                gr.update(value="", visible=False),    # output_error (清空并隐藏)
-                gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar (重置)
-            ),
-            outputs=[step1_indicator, step2_indicator, step3_indicator, step4_indicator, step1_container, step2_container, step3_container, step4_container, step3_summary, step4_summary, output_audio, output_error, progress_bar]
+            fn=go_back_to_step1,
+            inputs=[audio_upload, audio_mic],
+            outputs=[
+                step1_indicator, step2_indicator, step3_indicator,
+                step1_container, step2_container, step3_container,
+                step3_summary, output_audio, output_error, progress_bar,
+                audio_trim_warning, preset_save_status, audio_upload,
+                preset_list, load_preset_dropdown, load_preset_btn,
+                delete_preset_btn, preset_load_status, preset_title, preset_divider
+            ]
         )
         step2_next.click(
             fn=go_to_step3,
             inputs=[audio_upload, audio_mic, prompt_audio_text],
-            outputs=[step1_indicator, step2_indicator, step3_indicator, step4_indicator, step1_container, step2_container, step3_container, step4_container, step3_summary, step4_summary]
+            outputs=[step1_indicator, step2_indicator, step3_indicator, step1_container, step2_container, step3_container, step3_summary, output_audio, output_error, progress_bar, audio_trim_warning, preset_save_status]
         )
 
         # 步骤3：清空按钮
         clear_text_btn.click(
-            fn=lambda: "",
-            outputs=[text_input]
+            fn=lambda: (gr.update(value=""), gr.update(interactive=False)),
+            outputs=[text_input, generate_btn]
         )
 
-        # 步骤3：文本输入后启用"下一步"按钮
+        # 步骤3：文本输入后启用"生成语音"按钮
         text_input.change(
             fn=validate_step3,
             inputs=[text_input],
-            outputs=[step3_next]
+            outputs=[generate_btn]
+        )
+
+        # 步骤3：生成按钮
+        generate_btn.click(
+            fn=handle_generate,
+            inputs=[audio_upload, audio_mic, text_input, prompt_audio_text],
+            outputs=[progress_bar, output_audio, output_error]
         )
 
         # 步骤3：导航按钮
@@ -897,75 +1313,42 @@ def create_interface() -> gr.Blocks:
             fn=lambda audio_upload_file, audio_mic_file: (
                 gr.update(value='<div class="step-item completed"><span class="step-number">1</span><span class="step-label">上传参考音频</span></div>'),
                 gr.update(value='<div class="step-item active"><span class="step-number">2</span><span class="step-label">输入音频文本</span></div>'),
-                gr.update(value='<div class="step-item"><span class="step-number">3</span><span class="step-label">输入合成文本</span></div>'),
-                gr.update(value='<div class="step-item"><span class="step-number">4</span><span class="step-label">生成语音</span></div>'),
+                gr.update(value='<div class="step-item"><span class="step-number">3</span><span class="step-label">生成语音</span></div>'),
                 gr.update(visible=False),  # step1_container
                 gr.update(visible=True),   # step2_container
                 gr.update(visible=False),  # step3_container
-                gr.update(visible=False),  # step4_container
-                gr.update(value=""),       # step3_summary (清空)
-                gr.update(value=""),       # step4_summary (清空)
+                gr.update(value="", visible=False),  # step3_summary (清空并隐藏)
                 gr.update(value=None, visible=False),  # output_audio (清空并隐藏)
                 gr.update(value="", visible=False),    # output_error (清空并隐藏)
                 gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar (重置)
+                gr.update(visible=False, value=""),  # audio_trim_warning (隐藏警告框)
+                gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
             ),
             inputs=[audio_upload, audio_mic],
-            outputs=[step1_indicator, step2_indicator, step3_indicator, step4_indicator, step1_container, step2_container, step3_container, step4_container, step3_summary, step4_summary, output_audio, output_error, progress_bar]
+            outputs=[step1_indicator, step2_indicator, step3_indicator, step1_container, step2_container, step3_container, step3_summary, output_audio, output_error, progress_bar, audio_trim_warning, preset_save_status]
         )
-        step3_next.click(
-            fn=go_to_step4,
-            inputs=[audio_upload, audio_mic, prompt_audio_text, text_input],
-            outputs=[step1_indicator, step2_indicator, step3_indicator, step4_indicator, step1_container, step2_container, step3_container, step4_container, step4_summary, output_audio, output_error, progress_bar]
-        )
-
-        # 步骤4：生成按钮
-        generate_btn.click(
-            fn=handle_generate,
-            inputs=[audio_upload, audio_mic, text_input, prompt_audio_text],
-            outputs=[progress_bar, output_audio, output_error]
-        )
-
-        # 步骤4：导航按钮
-        step4_prev.click(
-            fn=lambda audio_upload_file, audio_mic_file, prompt_text: (
-                gr.update(value='<div class="step-item completed"><span class="step-number">1</span><span class="step-label">上传参考音频</span></div>'),
-                gr.update(value='<div class="step-item completed"><span class="step-number">2</span><span class="step-label">输入音频文本</span></div>'),
-                gr.update(value='<div class="step-item active"><span class="step-number">3</span><span class="step-label">输入合成文本</span></div>'),
-                gr.update(value='<div class="step-item"><span class="step-number">4</span><span class="step-label">生成语音</span></div>'),
-                gr.update(visible=False),  # step1_container
-                gr.update(visible=False),  # step2_container
-                gr.update(visible=True),   # step3_container
-                gr.update(visible=False),  # step4_container
-                gr.update(value=""),       # step4_summary (清空)
-                gr.update(value=None, visible=False),  # output_audio (清空并隐藏)
-                gr.update(value="", visible=False),    # output_error (清空并隐藏)
-                gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar (重置)
-            ),
-            inputs=[audio_upload, audio_mic, prompt_audio_text],
-            outputs=[step1_indicator, step2_indicator, step3_indicator, step4_indicator, step1_container, step2_container, step3_container, step4_container, step4_summary, output_audio, output_error, progress_bar]
-        )
-        step4_restart.click(
+        step3_restart.click(
             fn=lambda: (
                 gr.update(value='<div class="step-item active"><span class="step-number">1</span><span class="step-label">上传参考音频</span></div>'),
                 gr.update(value='<div class="step-item"><span class="step-number">2</span><span class="step-label">输入音频文本</span></div>'),
-                gr.update(value='<div class="step-item"><span class="step-number">3</span><span class="step-label">输入合成文本</span></div>'),
-                gr.update(value='<div class="step-item"><span class="step-number">4</span><span class="step-label">生成语音</span></div>'),
+                gr.update(value='<div class="step-item"><span class="step-number">3</span><span class="step-label">生成语音</span></div>'),
                 gr.update(visible=True),   # step1_container
                 gr.update(visible=False),  # step2_container
                 gr.update(visible=False),  # step3_container
-                gr.update(visible=False),  # step4_container
                 None,  # audio_upload
                 None,  # audio_mic
                 "",    # prompt_audio_text
                 "",    # text_input
-                gr.update(value=""),       # step3_summary (清空)
-                gr.update(value=""),       # step4_summary (清空)
-                None,  # output_audio
-                gr.update(visible=False),  # output_error
+                gr.update(value="", visible=False),  # step3_summary (清空并隐藏)
+                gr.update(value=None, interactive=False),  # output_audio (清空并隐藏)
+                gr.update(value="", visible=False),    # output_error (清空并隐藏)
                 gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar (重置值、隐藏、重置label)
+                gr.update(interactive=False),  # generate_btn (禁用)
+                gr.update(visible=False, value=""),  # audio_trim_warning (隐藏警告框)
+                gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
             ),
-            outputs=[step1_indicator, step2_indicator, step3_indicator, step4_indicator, step1_container, step2_container, step3_container, step4_container,
-                    audio_upload, audio_mic, prompt_audio_text, text_input, step3_summary, step4_summary, output_audio, output_error, progress_bar]
+            outputs=[step1_indicator, step2_indicator, step3_indicator, step1_container, step2_container, step3_container,
+                    audio_upload, audio_mic, prompt_audio_text, text_input, step3_summary, output_audio, output_error, progress_bar, generate_btn, audio_trim_warning, preset_save_status]
         )
 
     return app
@@ -1636,6 +2019,17 @@ def main():
         animation: pulse 2s infinite !important;
     }
 
+    /* 当警告框为空时，完全隐藏它（包括padding和margin） */
+    .trim-warning:empty,
+    .trim-warning[value=""],
+    .trim-warning[data-value=""] {
+        display: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        border: none !important;
+        animation: none !important;
+    }
+
     .trim-warning strong {
         color: #bf360c !important;
         font-weight: 700 !important;
@@ -1648,6 +2042,43 @@ def main():
         50% {
             box-shadow: 0 0 0 8px rgba(255, 152, 0, 0) !important;
         }
+    }
+
+    /* 音色预设列表样式 */
+    .preset-list {
+        background-color: #f8f9fa !important;
+        border: 1px solid #dee2e6 !important;
+        border-radius: 6px !important;
+        padding: 12px 16px !important;
+        margin: 12px 0 !important;
+        font-size: 13px !important;
+        line-height: 1.6 !important;
+        max-height: 200px !important;
+        overflow-y: auto !important;
+    }
+
+    /* 预设保存和加载区域样式 */
+    .preset-save-section,
+    .preset-load-section {
+        background-color: #fafbfc !important;
+        border: 1px solid #e9ecef !important;
+        border-radius: 6px !important;
+        padding: 12px !important;
+        margin: 8px 0 !important;
+    }
+
+    .subsection-title {
+        font-size: 14px !important;
+        font-weight: 600 !important;
+        color: #091a31 !important;
+        margin-bottom: 8px !important;
+    }
+
+    /* 分割线样式 */
+    .divider {
+        border: none !important;
+        border-top: 1px solid #e9ecef !important;
+        margin: 20px 0 !important;
     }
 
     /* 隐藏进度条右边的数值显示和重置按钮 */
