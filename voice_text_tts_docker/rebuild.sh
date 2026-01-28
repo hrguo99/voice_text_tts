@@ -17,12 +17,25 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
+# 检测 Docker Compose 命令（支持 V1 和 V2）
+if docker compose version &> /dev/null; then
+    DOCKER_COMPOSE="docker compose"
+elif command -v docker-compose &> /dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+else
+    echo "⚠️  警告: Docker Compose 未找到，将使用 docker compose 命令..."
+    DOCKER_COMPOSE="docker compose"
+fi
+
+echo "🔧 使用: $DOCKER_COMPOSE"
+echo ""
+
 echo "🧹 彻底清理旧资源..."
 echo ""
 
 # 停止并删除所有相关容器
 echo "1️⃣  停止并删除容器..."
-docker-compose down 2>/dev/null || true
+$DOCKER_COMPOSE down 2>/dev/null || true
 docker ps -a | grep voice_text_tts_app | awk '{print $1}' | xargs -r docker rm -f 2>/dev/null || true
 
 # 删除旧镜像
@@ -69,7 +82,7 @@ read -p "启动容器？(y/N): " start_now
 if [[ $start_now =~ ^[Yy]$ ]]; then
     echo ""
     echo "🚀 启动容器..."
-    docker-compose up -d
+    $DOCKER_COMPOSE up -d
     echo ""
     echo "✅ 容器已启动"
     echo ""
@@ -77,5 +90,5 @@ if [[ $start_now =~ ^[Yy]$ ]]; then
     echo "  本地: http://localhost:7863"
     echo "  局域网: http://$(hostname -I | awk '{print $1}'):7863"
     echo ""
-    echo "查看日志: docker-compose logs -f"
+    echo "查看日志: $DOCKER_COMPOSE logs -f"
 fi

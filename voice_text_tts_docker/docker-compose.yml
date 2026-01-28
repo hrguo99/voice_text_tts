@@ -40,6 +40,8 @@ services:
       - ASR_FUNASR_DECODER_CHUNK_LOOK_BACK=${ASR_FUNASR_DECODER_CHUNK_LOOK_BACK:-0}
       - ASR_FUNASR_HOTWORDS=${ASR_FUNASR_HOTWORDS:-{}}
       - ASR_FUNASR_USE_ITN=${ASR_FUNASR_USE_ITN:-true}
+    volumes:
+      - ./presets:/app/presets
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://0.0.0.0:7863', timeout=5)"]

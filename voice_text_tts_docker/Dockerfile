@@ -57,11 +57,15 @@ ENV API_HOST=host.docker.internal \
     SERVER_NAME=0.0.0.0 \
     SERVER_PORT=7863 \
     MAX_TEXT_LENGTH=1000 \
+    PRESETS_DIR=/app/presets \
     ASR_ENABLED=false \
     ASR_BACKEND_TYPE=funasr \
     GRADIO_SHARE=true \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
+
+# 创建预设目录
+RUN mkdir -p /app/presets
 
 # 创建 Docker 环境标识文件（用于应用检测）
 RUN touch /.dockerenv
