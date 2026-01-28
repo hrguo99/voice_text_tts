@@ -1,3 +1,6 @@
+# 环境配置
+.env
+
 # Python
 __pycache__/
 *.py[cod]
@@ -8,34 +11,19 @@ __pycache__/
 dist/
 build/
 
-# Virtual Environment
-venv/
-env/
-ENV/
+# 日志
+*.log
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Docker
-*.tar.gz
-*.tar
-
-# Logs
-*.log
-logs/
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Build artifacts
-voice_text_tts_docker-image-*.tar.gz
+# 临时文件
+*.tmp
+.temp/

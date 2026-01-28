@@ -67,3 +67,8 @@ HEU_KMS_Activator_v63.3.0/
 
 # Config files with sensitive data
 config.py
+
+# Docker
+voice_text_tts_docker/.env
+voice_text_tts_docker/voice_text_tts/
+

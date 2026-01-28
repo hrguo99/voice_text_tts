@@ -1,220 +1,229 @@
-# Voice Text TTS Docker
+# Voice Text TTS - Docker 部署指南
 
-基于 Gradio 的语音生成功能 Docker 部署方案，支持一键启动和环境变量配置。
+这是一个基于 Gradio 的语音文本 TTS 应用的 Docker 部署包。
 
 ## 功能特性
 
-- 🎙️ **语音合成**：基于 Fun-CosyVoice3-0.5B-2512 API 的语音生成
-- 🎤 **多种音频输入**：支持上传音频文件或麦克风录制
-- 📝 **ASR 语音识别**：可选的自动语音转文本功能（支持 FunASR）
-- 🐳 **Docker 部署**：容器化部署，一键启动
-- ⚙️ **灵活配置**：通过环境变量配置所有参数
+- 🎤 **语音生成**: 支持多种音色和模式的语音合成
+- 🎤 **语音识别**: 集成 ASR 功能，支持语音转文字
+- 🎨 **Web 界面**: 基于 Gradio 6.0+ 的现代化界面
+- 🔧 **灵活配置**: 支持环境变量配置
+- 🐳 **Docker 支持**: 一键部署，易于管理
+
+## 环境要求
+
+- Docker 20.10+
+- Docker Compose 2.0+
+- 至少 2GB 可用内存
+- 至少 5GB 可用磁盘空间
 
 ## 快速开始
 
-### 前置要求
+### 1. 准备工作
 
-- Docker (>= 20.10)
+确保你已经在同一目录下有 `voice_text_tts` 文件夹（包含应用源代码）。
 
-### 方式一：分步启动（推荐）
-
-```bash
-# 进入项目目录
-cd voice_text_tts_docker
-
-# 步骤1: 构建镜像
-./build.sh
-
-# 步骤2: 启动服务
-./run.sh
+目录结构应该是：
+```
+.
+├── voice_text_tts/           # 应用源代码
+│   ├── app.py
+│   ├── config.py
+│   ├── requirements.txt
+│   └── ...
+└── voice_text_tts_docker/    # Docker 部署包
+    ├── Dockerfile
+    ├── docker-compose.yml
+    └── ...
 ```
 
-启动成功后，访问 `http://localhost:7862` 即可使用。
+### 2. 配置环境变量（可选）
 
-### 方式二：一键启动
-
+复制示例配置文件：
 ```bash
-# 自动构建并启动
+cp .env.example .env
+```
+
+根据需要修改 `.env` 文件中的配置项。
+
+### 3. 快速启动（推荐）
+
+使用提供的快速启动脚本：
+```bash
+cd voice_text_tts_docker
 ./start.sh
 ```
 
-### 方式三：使用 Docker Compose
+### 4. 手动构建和启动
 
+或者手动执行以下步骤：
+
+使用 Docker Compose：
 ```bash
-# 复制配置文件
-cp .env.example .env
-
-# 构建并启动
-docker compose up -d
+# 从父目录运行（包含 voice_text_tts 和 voice_text_tts_docker 的目录）
+cd ..  # 如果当前在 voice_text_tts_docker 目录
+docker-compose -f voice_text_tts_docker/docker-compose.yml up -d
 ```
 
-## 管理命令
-
-### 构建脚本 (build.sh)
-
+或使用 Docker 命令构建镜像：
 ```bash
-./build.sh              # 构建镜像
-./build.sh --no-cache   # 不使用缓存构建
-./build.sh --help       # 显示帮助
-```
+# 构建镜像（从 voice_text_tts_docker 目录运行）
+cd voice_text_tts_docker
+./build.sh
 
-### 运行脚本 (run.sh)
-
-```bash
-./run.sh start    # 启动服务（默认）
-./run.sh stop     # 停止服务
-./run.sh restart  # 重启服务
-./run.sh status   # 查看服务状态
-./run.sh logs     # 查看服务日志
-./run.sh shell    # 进入容器Shell
-./run.sh rm       # 删除容器
-./run.sh help     # 显示帮助
-```
-
-### 一键脚本 (start.sh)
-
-```bash
-./start.sh start    # 构建并启动服务
-./start.sh stop     # 停止服务
-./start.sh restart  # 重启服务
-./start.sh logs     # 查看服务日志
-./start.sh build    # 仅构建镜像
-./start.sh cleanup  # 清理容器和镜像
-./start.sh help     # 显示帮助信息
-```
-
-## 配置说明
-
-复制 `.env.example` 为 `.env` 并根据需要修改配置：
-
-```bash
-cp .env.example .env
-```
-
-### 核心配置项
-
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| `API_HOST` | TTS API 服务器地址 | `127.0.0.1` |
-| `API_PORT` | TTS API 服务器端口 | `50000` |
-| `API_MODE` | TTS API 模式 | `zero_shot` |
-| `PROMPT_TEXT` | 系统提示文本 | `You are a helpful assistant.<|endofprompt|>` |
-| `SERVER_PORT` | Gradio 服务端口 | `7862` |
-| `MAX_TEXT_LENGTH` | 最大文本长度 | `1000` |
-| `ASR_ENABLED` | 是否启用 ASR 功能 | `false` |
-| `ASR_BACKEND_TYPE` | ASR 后端类型 | `funasr` |
-
-### ASR 配置项（可选）
-
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| `ASR_FUNASR_URI` | FunASR WebSocket 地址 | `ws://localhost:10095/ws` |
-| `ASR_FUNASR_MODE` | FunASR 模式 | `2pass-offline` |
-| `ASR_FUNASR_CHUNK_SIZE` | 分块大小 | `[5, 10, 5]` |
-| `ASR_FUNASR_CHUNK_INTERVAL` | 分块间隔（毫秒） | `10` |
-| `ASR_FUNASR_USE_ITN` | 是否使用 ITN | `true` |
-
-## Docker 命令
-
-### 使用 Docker Compose
-
-```bash
-# 构建并启动
-docker compose up -d
-
-# 查看日志
-docker compose logs -f
-
-# 停止服务
-docker compose down
-
-# 重启服务
-docker compose restart
-```
-
-### 使用 Docker 原生命令
-
-```bash
-# 构建镜像
-docker build -t voice-text-tts .
+# 或手动构建
+docker build -f voice_text_tts_docker/Dockerfile -t voice-text-tts:latest ..
 
 # 运行容器
 docker run -d \
   --name voice_text_tts_app \
-  -p 7862:7862 \
-  --env-file .env \
-  --restart unless-stopped \
-  voice-text-tts
-
-# 查看日志
-docker logs -f voice_text_tts_app
-
-# 停止容器
-docker stop voice_text_tts_app
-docker rm voice_text_tts_app
+  -p 7863:7863 \
+  --env-file voice_text_tts_docker/.env \
+  voice-text-tts:latest
 ```
 
-## 项目结构
+### 5. 测试配置
 
-```
-voice_text_tts_docker/
-├── Dockerfile              # Docker 镜像构建文件
-├── docker-compose.yml      # Docker Compose 配置
-├── .dockerignore           # Docker 构建忽略文件
-├── .env.example            # 环境变量示例文件
-├── build.sh                # 镜像构建脚本
-├── run.sh                  # 服务运行脚本
-├── start.sh                # 一键启动脚本
-├── README.md               # 使用说明
-└── voice_text_tts/         # 应用源代码
-    ├── app.py              # Gradio 应用主程序
-    ├── config.py           # 配置文件（支持环境变量）
-    ├── asr_client.py       # ASR 客户端
-    ├── asr_backends.py     # ASR 后端接口
-    └── requirements.txt    # Python 依赖
+在构建前，可以运行测试脚本验证配置：
+```bash
+cd voice_text_tts_docker
+./test-config.sh
 ```
 
-## 使用说明
+### 6. 访问应用
 
-1. **准备参考音频**：上传音频文件或使用麦克风录制
-2. **输入参考音频文本**：手动输入或使用 ASR 自动识别
-3. **输入要合成的文本**：在文本框中输入目标文字
-4. **生成语音**：点击"生成语音"按钮开始合成
+服务启动后，在浏览器中访问：
+- 本地: http://localhost:7863
+- 局域网: http://YOUR_IP:7863
 
-## 注意事项
+## 配置说明
 
-1. **TTS API 依赖**：需要确保 TTS API 服务（Fun-CosyVoice3-0.5B-2512）已启动并可访问
-2. **ASR 功能**：如需使用 ASR 功能，需要设置 `ASR_ENABLED=true` 并确保 ASR 服务可访问
-3. **端口映射**：默认使用 7862 端口，如有冲突请修改 `.env` 中的 `SERVER_PORT`
-4. **网络配置**：如果 TTS/ASR 服务在其他容器中，建议使用 Docker 网络进行通信
+### 环境变量
+
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| `SERVER_PORT` | 7863 | 应用监听端口 |
+| `API_HOST` | 127.0.0.1 | TTS API 服务地址 |
+| `API_PORT` | 50000 | TTS API 服务端口 |
+| `API_MODE` | zero_shot | TTS 模式 |
+| `PROMPT_TEXT` | You are a helpful assistant. | 提示文本 |
+| `MAX_TEXT_LENGTH` | 1000 | 最大文本长度 |
+| `ASR_ENABLED` | false | 是否启用 ASR 功能 |
+| `ASR_BACKEND_TYPE` | funasr | ASR 后端类型 |
+| `ASR_FUNASR_URI` | ws://localhost:10095/ws | ASR WebSocket 地址 |
+
+### ASR 配置
+
+如果要启用 ASR 功能，需要：
+
+1. 设置 `ASR_ENABLED=true`
+2. 配置 ASR WebSocket 服务地址（`ASR_FUNASR_URI`）
+3. 根据 ASR 服务调整其他参数
+
+## 常用命令
+
+### 查看日志
+```bash
+# 从父目录运行
+docker-compose -f voice_text_tts_docker/docker-compose.yml logs -f
+
+# 或使用启动脚本
+cd voice_text_tts_docker
+./start.sh  # 选择不重新构建
+```
+
+### 停止服务
+```bash
+# 使用停止脚本
+cd voice_text_tts_docker
+./stop.sh
+
+# 或手动停止
+docker-compose -f voice_text_tts_docker/docker-compose.yml down
+```
+
+### 重启服务
+```bash
+docker-compose -f voice_text_tts_docker/docker-compose.yml restart
+```
+
+### 更新应用
+```bash
+# 拉取最新代码
+cd voice_text_tts
+git pull
+
+# 重新构建并启动
+cd voice_text_tts_docker
+./start.sh  # 选择重新构建
+```
+
+### 进入容器
+```bash
+docker exec -it voice_text_tts_app bash
+```
 
 ## 故障排查
 
-### 服务无法启动
+### 容器无法启动
 
+1. 检查端口是否被占用：
 ```bash
-# 查看容器日志
-./run.sh logs
-# 或
-docker logs -f voice_text_tts_app
+sudo lsof -i :7863
 ```
 
-### 无法连接 TTS API
+2. 查看容器日志：
+```bash
+docker logs voice_text_tts_app
+```
 
-1. 检查 TTS API 服务是否运行
-2. 确认 `.env` 中的 `API_HOST` 和 `API_PORT` 配置正确
-3. 如果 API 在 Docker 容器中，使用容器名称而非 `127.0.0.1`
+### 无法访问 Web 界面
 
-### ASR 功能不可用
+1. 检查容器是否在运行：
+```bash
+docker ps | grep voice_text_tts_app
+```
 
-1. 确认 `.env` 中 `ASR_ENABLED=true`
-2. 检查 ASR 服务 WebSocket 地址是否正确
-3. 查看 ASR 服务日志
+2. 检查健康状态：
+```bash
+docker inspect --format='{{.State.Health.Status}}' voice_text_tts_app
+```
+
+3. 确认防火墙设置：
+```bash
+sudo ufw allow 7863
+```
+
+### API 连接失败
+
+如果应用无法连接到 TTS API 服务：
+
+1. 使用 `host.docker.internal` 访问宿主机服务（Docker Desktop）
+2. 使用宿主机实际 IP 地址（Linux Docker）
+3. 确认 API 服务正在运行且可访问
+
+## 依赖说明
+
+本项目依赖以下核心库（版本见 [requirements.txt](../voice_text_tts/requirements.txt)）：
+
+- **gradio** (>=6.0.0): Web 界面框架
+- **huggingface_hub** (>=0.23.0): Hugging Face 集成
+- **numpy** (>=1.24.0): 数值计算
+- **ffmpeg-python**, **pydub**, **ffmpy**: 音频处理
+- **requests** (>=2.31.0): HTTP 请求
+- **websockets** (>=12.0): WebSocket 支持
+
+## 系统要求
+
+容器内已安装以下系统依赖：
+
+- **ffmpeg**: 音频/视频处理
+- **gcc/g++**: 编译工具
 
 ## 许可证
 
-本项目遵循原 voice_text_tts 项目的许可证。
+请参考主项目的许可证文件。
 
-## 联系方式
+## 支持
 
-如有问题或建议，请联系项目维护者。
+如有问题，请查看主项目文档或提交 Issue。
