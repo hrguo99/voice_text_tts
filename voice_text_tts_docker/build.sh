@@ -1,62 +1,95 @@
 #!/bin/bash
-# Voice Text TTS - Docker 构建脚本
 
-set -e
+# 颜色输出
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
 
-echo "======================================"
-echo "Voice Text TTS - Docker 构建脚本"
-echo "======================================"
-
-# 获取脚本所在目录并切换到该目录
+# 脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+echo -e "${GREEN}======================================${NC}"
+echo -e "${GREEN}  Voice Text TTS Docker 构建脚本${NC}"
+echo -e "${GREEN}======================================${NC}"
+echo ""
 
 # 检查 Docker 是否安装
 if ! command -v docker &> /dev/null; then
-    echo "❌ 错误: Docker 未安装"
+    echo -e "${RED}错误: Docker 未安装，请先安装 Docker${NC}"
     exit 1
 fi
 
-# 检查 voice_text_tts 目录是否存在
-if [ ! -d "voice_text_tts" ]; then
-    echo "⚠️  voice_text_tts 目录不存在"
-    echo "📋 正在复制源代码..."
-    ./copy-source.sh
-fi
+# 检查必要文件是否存在
+echo -e "${YELLOW}[1/5] 检查项目文件...${NC}"
+required_files=("app.py" "asr_backends.py" "asr_client.py" "config.py" "requirements.txt")
+for file in "${required_files[@]}"; do
+    if [ ! -f "$PROJECT_DIR/voice_text_tts/$file" ]; then
+        echo -e "${RED}错误: 找不到必需文件 voice_text_tts/$file${NC}"
+        exit 1
+    fi
+done
+echo -e "${GREEN}✓ 所有必需文件存在${NC}"
+echo ""
 
-# 检查 Dockerfile 是否存在
-if [ ! -f "Dockerfile" ]; then
-    echo "❌ 错误: 找不到 Dockerfile"
-    echo "   当前目录: $(pwd)"
-    exit 1
-fi
+# 复制项目文件到构建目录
+echo -e "${YELLOW}[2/5] 准备构建环境...${NC}"
+BUILD_DIR="$SCRIPT_DIR/build"
+rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
 
-# 删除旧镜像（如果存在）
-echo "🧹 清理旧镜像..."
-if docker images -q voice-text-tts:latest | grep -q .; then
-    echo "🗑️  删除旧镜像: voice-text-tts:latest"
-    docker rmi voice-text-tts:latest 2>/dev/null || echo "   (旧镜像已被使用，将在重新构建后自动清理)"
-    # 清理悬空镜像
-    docker image prune -f >/dev/null 2>&1 || true
+cp "$PROJECT_DIR/voice_text_tts/app.py" "$BUILD_DIR/"
+cp "$PROJECT_DIR/voice_text_tts/app_tabs.py" "$BUILD_DIR/" 2>/dev/null || true
+cp "$PROJECT_DIR/voice_text_tts/asr_backends.py" "$BUILD_DIR/"
+cp "$PROJECT_DIR/voice_text_tts/asr_client.py" "$BUILD_DIR/"
+cp "$PROJECT_DIR/voice_text_tts/config.py" "$BUILD_DIR/"
+cp "$PROJECT_DIR/voice_text_tts/requirements.txt" "$BUILD_DIR/"
+cp "$SCRIPT_DIR/Dockerfile" "$BUILD_DIR/"
+cp "$SCRIPT_DIR/.dockerignore" "$BUILD_DIR/"
+
+echo -e "${GREEN}✓ 构建环境准备完成${NC}"
+echo ""
+
+# 构建 Docker 镜像
+echo -e "${YELLOW}[3/5] 开始构建 Docker 镜像...${NC}"
+cd "$BUILD_DIR"
+
+IMAGE_NAME="voice-text-tts"
+IMAGE_TAG="latest"
+
+if docker build -t "${IMAGE_NAME}:${IMAGE_TAG}" .; then
+    echo -e "${GREEN}✓ Docker 镜像构建成功${NC}"
 else
-    echo "✅ 没有旧镜像需要删除"
+    echo -e "${RED}错误: Docker 镜像构建失败${NC}"
+    exit 1
 fi
 echo ""
 
-# 构建镜像（使用当前目录作为构建上下文）
-echo "🔨 开始构建镜像..."
-echo "📂 构建上下文: $(pwd)"
-echo "📄 Dockerfile: Dockerfile"
+# 显示镜像信息
+echo -e "${YELLOW}[4/5] 镜像信息:${NC}"
+docker images | grep "$IMAGE_NAME"
 echo ""
 
-docker build -t voice-text-tts:latest .
+# 清理构建目录（可选）
+echo -e "${YELLOW}[5/5] 清理构建目录...${NC}"
+cd "$SCRIPT_DIR"
+rm -rf "$BUILD_DIR"
+echo -e "${GREEN}✓ 清理完成${NC}"
+echo ""
 
+# 完成
+echo -e "${GREEN}======================================${NC}"
+echo -e "${GREEN}  构建完成！${NC}"
+echo -e "${GREEN}======================================${NC}"
 echo ""
-echo "✅ 镜像构建成功！"
+echo -e "${YELLOW}下一步操作:${NC}"
+echo -e "  1. 使用以下命令启动容器:"
+echo -e "     ${GREEN}cd $SCRIPT_DIR && ./start.sh${NC}"
 echo ""
-echo "镜像信息:"
-docker images voice-text-tts:latest
+echo -e "  2. 或使用 docker-compose:"
+echo -e "     ${GREEN}cd $SCRIPT_DIR && docker-compose up -d${NC}"
 echo ""
-echo "运行容器:"
-echo "  docker run -d --name voice_text_tts_app -p 7863:7863 voice-text-tts:latest"
-
+echo -e "  3. 访问 Web 界面:"
+echo -e "     ${GREEN}http://localhost:7863${NC}"
+echo ""

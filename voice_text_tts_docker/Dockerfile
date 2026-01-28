@@ -1,78 +1,66 @@
-FROM python:3.12-slim
+# 多阶段构建 - 第一阶段：依赖构建
+FROM python:3.13-slim AS builder
 
-LABEL maintainer="guohaoran"
-LABEL description="Voice Text TTS Application with Gradio Interface"
+# 设置工作目录
+WORKDIR /build
+
+# 安装构建依赖
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制依赖文件
+COPY requirements.txt .
+
+# 创建虚拟环境并安装依赖
+RUN python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --upgrade pip && \
+    /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+
+# 多阶段构建 - 第二阶段：运行环境
+FROM python:3.13-slim
+
+# 设置元数据
+LABEL maintainer="voice_text_tts"
+LABEL description="Voice Text TTS Docker Image with Python 3.13"
+
+# 设置环境变量
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/opt/venv/bin:$PATH"
 
 # 设置工作目录
 WORKDIR /app
 
-# 配置 pip 使用国内镜像源，并设置不缓存
-ENV PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
-    PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
-
-# 安装系统依赖并清理（在同一层完成）
+# 安装运行时依赖（只安装 FFmpeg）
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ffmpeg \
-    gcc \
-    g++ \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# 先复制依赖文件，利用 Docker 缓存
-COPY voice_text_tts/requirements.txt /app/
+# 从构建阶段复制虚拟环境
+COPY --from=builder /opt/venv /opt/venv
 
-# 安装 Python 依赖
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir \
-    --default-timeout=1000 \
-    --retries 5 \
-    -r requirements.txt
+# 复制项目文件
+COPY app.py .
+COPY app_tabs.py .
+COPY asr_backends.py .
+COPY asr_client.py .
+COPY config.py .
+COPY requirements.txt .
 
-# 复制应用代码
-COPY voice_text_tts/ /app/
-
-# 清理不需要的文件（文档、示例等）
-RUN find /app -type f -name '*.md' -delete && \
-    find /app -type f -name '*.txt' ! -name 'requirements.txt' -delete && \
-    find /app -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true && \
-    find /app -type f -name '*.pyc' -delete && \
-    find /app -type f -name '*.pyo' -delete
-
-# 移除编译工具（减小镜像大小）
-RUN apt-get remove -y gcc g++ && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/* /root/.cache
+# 创建必要的目录
+RUN mkdir -p /app/presets /app/temp
 
 # 暴露端口
 EXPOSE 7863
 
-# 设置环境变量（可通过 docker run -e 覆盖）
-ENV API_HOST=host.docker.internal \
-    API_PORT=50000 \
-    API_MODE=zero_shot \
-    PROMPT_TEXT="You are a helpful assistant.<|endofprompt|>" \
-    SERVER_NAME=0.0.0.0 \
-    SERVER_PORT=7863 \
-    MAX_TEXT_LENGTH=1000 \
-    PRESETS_DIR=/app/presets \
-    ASR_ENABLED=false \
-    ASR_BACKEND_TYPE=funasr \
-    GRADIO_SHARE=true \
-    PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
-
-# 创建预设目录
-RUN mkdir -p /app/presets
-
-# 创建 Docker 环境标识文件（用于应用检测）
-RUN touch /.dockerenv
-
 # 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import socket; s=socket.socket(); s.connect(('127.0.0.1', 7863)); s.close()" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import socket; s = socket.socket(); s.connect(('127.0.0.1', 7863)); s.close()" || exit 1
 
 # 启动应用
-CMD ["python", "-u", "app.py"]
+CMD ["python", "app.py"]

@@ -1,229 +1,492 @@
-# Voice Text TTS - Docker 部署指南
+# Voice Text TTS Docker 部署文档
 
-这是一个基于 Gradio 的语音文本 TTS 应用的 Docker 部署包。
+基于 Python 3.13 的 Voice Text TTS 项目 Docker 化部署方案。
+
+## 目录结构
+
+```
+voice_text_tts_docker/
+├── Dockerfile              # Docker 镜像定义文件（多阶段构建）
+├── docker-compose.yml      # Docker Compose 配置文件
+├── .dockerignore          # Docker 构建忽略文件
+├── build.sh               # 一键构建脚本
+├── start.sh               # 一键启动脚本
+├── README.md              # 本文档
+├── presets/               # 音色预设目录（持久化）
+└── temp/                  # 临时文件目录（持久化）
+```
 
 ## 功能特性
 
-- 🎤 **语音生成**: 支持多种音色和模式的语音合成
-- 🎤 **语音识别**: 集成 ASR 功能，支持语音转文字
-- 🎨 **Web 界面**: 基于 Gradio 6.0+ 的现代化界面
-- 🔧 **灵活配置**: 支持环境变量配置
-- 🐳 **Docker 支持**: 一键部署，易于管理
-
-## 环境要求
-
-- Docker 20.10+
-- Docker Compose 2.0+
-- 至少 2GB 可用内存
-- 至少 5GB 可用磁盘空间
+- ✅ 基于 Python 3.13 slim 镜像
+- ✅ 多阶段构建，优化镜像大小
+- ✅ 集成 FFmpeg 音频处理
+- ✅ 支持音色预设持久化存储
+- ✅ 健康检查机制
+- ✅ 一键构建和启动
+- ✅ 支持环境变量配置
+- ✅ 自动重启策略
 
 ## 快速开始
 
-### 1. 准备工作
+### 前置要求
 
-确保你已经在同一目录下有 `voice_text_tts` 文件夹（包含应用源代码）。
+- Docker 20.10+
+- Docker Compose 1.29+ (可选)
+- 至少 2GB 可用磁盘空间
 
-目录结构应该是：
-```
-.
-├── voice_text_tts/           # 应用源代码
-│   ├── app.py
-│   ├── config.py
-│   ├── requirements.txt
-│   └── ...
-└── voice_text_tts_docker/    # Docker 部署包
-    ├── Dockerfile
-    ├── docker-compose.yml
-    └── ...
-```
+### 方法一：使用一键脚本（推荐）
 
-### 2. 配置环境变量（可选）
+#### 1. 构建 Docker 镜像
 
-复制示例配置文件：
-```bash
-cp .env.example .env
-```
-
-根据需要修改 `.env` 文件中的配置项。
-
-### 3. 快速启动（推荐）
-
-使用提供的快速启动脚本：
 ```bash
 cd voice_text_tts_docker
+./build.sh
+```
+
+构建脚本会自动：
+- 检查必需的项目文件
+- 准备构建环境
+- 构建 Docker 镜像
+- 显示镜像信息
+- 清理临时文件
+
+#### 2. 启动容器
+
+```bash
 ./start.sh
 ```
 
-### 4. 手动构建和启动
+启动脚本会自动：
+- 检查镜像是否存在
+- 创建数据目录
+- 清理旧容器
+- 启动新容器
+- 显示服务信息
 
-或者手动执行以下步骤：
+#### 3. 访问服务
 
-使用 Docker Compose：
+打开浏览器访问：`http://localhost:7863`
+
+### 方法二：使用 Docker Compose
+
+#### 1. 构建并启动
+
 ```bash
-# 从父目录运行（包含 voice_text_tts 和 voice_text_tts_docker 的目录）
-cd ..  # 如果当前在 voice_text_tts_docker 目录
-docker-compose -f voice_text_tts_docker/docker-compose.yml up -d
+cd voice_text_tts_docker
+docker-compose up -d --build
 ```
 
-或使用 Docker 命令构建镜像：
+#### 2. 查看日志
+
 ```bash
-# 构建镜像（从 voice_text_tts_docker 目录运行）
+docker-compose logs -f
+```
+
+#### 3. 停止服务
+
+```bash
+docker-compose down
+```
+
+### 方法三：手动 Docker 命令
+
+#### 1. 构建镜像
+
+```bash
 cd voice_text_tts_docker
-./build.sh
+docker build -t voice-text-tts:latest -f Dockerfile ../voice_text_tts
+```
 
-# 或手动构建
-docker build -f voice_text_tts_docker/Dockerfile -t voice-text-tts:latest ..
+#### 2. 运行容器
 
-# 运行容器
+```bash
 docker run -d \
-  --name voice_text_tts_app \
-  -p 7863:7863 \
-  --env-file voice_text_tts_docker/.env \
-  voice-text-tts:latest
+    --name voice-text-tts \
+    -p 7863:7863 \
+    -v $(pwd)/presets:/app/presets \
+    -v $(pwd)/temp:/app/temp \
+    voice-text-tts:latest
 ```
-
-### 5. 测试配置
-
-在构建前，可以运行测试脚本验证配置：
-```bash
-cd voice_text_tts_docker
-./test-config.sh
-```
-
-### 6. 访问应用
-
-服务启动后，在浏览器中访问：
-- 本地: http://localhost:7863
-- 局域网: http://YOUR_IP:7863
 
 ## 配置说明
 
 ### 环境变量
 
+可以通过环境变量自定义配置：
+
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
-| `SERVER_PORT` | 7863 | 应用监听端口 |
 | `API_HOST` | 127.0.0.1 | TTS API 服务地址 |
 | `API_PORT` | 50000 | TTS API 服务端口 |
-| `API_MODE` | zero_shot | TTS 模式 |
-| `PROMPT_TEXT` | You are a helpful assistant. | 提示文本 |
-| `MAX_TEXT_LENGTH` | 1000 | 最大文本长度 |
+| `API_MODE` | zero_shot | TTS 工作模式 |
+| `SERVER_NAME` | 0.0.0.0 | Web 服务监听地址 |
+| `SERVER_PORT` | 7863 | Web 服务端口 |
 | `ASR_ENABLED` | false | 是否启用 ASR 功能 |
 | `ASR_BACKEND_TYPE` | funasr | ASR 后端类型 |
-| `ASR_FUNASR_URI` | ws://localhost:10095/ws | ASR WebSocket 地址 |
+| `MAX_TEXT_LENGTH` | 1000 | 最大文本长度限制 |
 
-### ASR 配置
+### 修改配置
 
-如果要启用 ASR 功能，需要：
+#### 方法一：修改 docker-compose.yml
 
-1. 设置 `ASR_ENABLED=true`
-2. 配置 ASR WebSocket 服务地址（`ASR_FUNASR_URI`）
-3. 根据 ASR 服务调整其他参数
+编辑 `docker-compose.yml` 文件中的 `environment` 部分：
+
+```yaml
+environment:
+  - API_HOST=127.0.0.1
+  - API_PORT=50000
+  - SERVER_PORT=7863
+  # 添加或修改其他配置
+```
+
+#### 方法二：使用 .env 文件
+
+创建 `.env` 文件：
+
+```bash
+API_HOST=127.0.0.1
+API_PORT=50000
+SERVER_PORT=7863
+ASR_ENABLED=true
+```
+
+#### 方法三：启动时指定
+
+```bash
+docker run -d \
+    -e API_HOST=192.168.1.100 \
+    -e API_PORT=50000 \
+    -e ASR_ENABLED=true \
+    -p 7863:7863 \
+    voice-text-tts:latest
+```
+
+### 端口映射
+
+默认端口映射：`7863:7863`
+
+修改主机端口：
+
+```bash
+# 使用 8080 端口访问
+docker run -p 8080:7863 voice-text-tts:latest
+```
+
+在 `docker-compose.yml` 中修改：
+
+```yaml
+ports:
+  - "8080:7863"
+```
+
+### 数据持久化
+
+容器使用两个数据卷：
+
+- `./presets:/app/presets` - 音色预设存储
+- `./temp:/app/temp` - 临时文件存储
+
+数据会自动持久化到宿主机的 `voice_text_tts_docker/presets` 和 `voice_text_tts_docker/temp` 目录。
 
 ## 常用命令
 
-### 查看日志
-```bash
-# 从父目录运行
-docker-compose -f voice_text_tts_docker/docker-compose.yml logs -f
+### 查看容器状态
 
-# 或使用启动脚本
-cd voice_text_tts_docker
-./start.sh  # 选择不重新构建
+```bash
+docker ps
 ```
 
-### 停止服务
-```bash
-# 使用停止脚本
-cd voice_text_tts_docker
-./stop.sh
+### 查看实时日志
 
-# 或手动停止
-docker-compose -f voice_text_tts_docker/docker-compose.yml down
+```bash
+docker logs -f voice-text-tts
 ```
 
-### 重启服务
+### 停止容器
+
 ```bash
-docker-compose -f voice_text_tts_docker/docker-compose.yml restart
+docker stop voice-text-tts
 ```
 
-### 更新应用
-```bash
-# 拉取最新代码
-cd voice_text_tts
-git pull
+### 启动已停止的容器
 
-# 重新构建并启动
-cd voice_text_tts_docker
-./start.sh  # 选择重新构建
+```bash
+docker start voice-text-tts
+```
+
+### 重启容器
+
+```bash
+docker restart voice-text-tts
+```
+
+### 删除容器
+
+```bash
+docker rm -f voice-text-tts
+```
+
+### 删除镜像
+
+```bash
+docker rmi voice-text-tts:latest
 ```
 
 ### 进入容器
+
 ```bash
-docker exec -it voice_text_tts_app bash
+docker exec -it voice-text-tts bash
+```
+
+### 查看容器资源使用
+
+```bash
+docker stats voice-text-tts
+```
+
+## 优化说明
+
+### 镜像大小优化
+
+本 Dockerfile 采用多种优化策略：
+
+1. **多阶段构建**：将构建环境和运行环境分离
+2. **Slim 基础镜像**：使用 `python:3.13-slim` 而非完整版
+3. **虚拟环境**：隔离 Python 依赖
+4. **清理缓存**：删除 apt 和 pip 缓存
+5. **.dockerignore**：排除不必要的文件
+
+预期镜像大小：~500MB - 800MB（取决于依赖）
+
+### 性能优化建议
+
+1. **资源限制**：
+
+```yaml
+deploy:
+  resources:
+    limits:
+      cpus: '2'
+      memory: 4G
+    reservations:
+      cpus: '1'
+      memory: 2G
+```
+
+2. **网络优化**：使用 `host` 网络模式（仅 Linux）
+
+```bash
+docker run --network host voice-text-tts:latest
+```
+
+3. **日志管理**：限制日志大小
+
+```yaml
+logging:
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
 ```
 
 ## 故障排查
 
-### 容器无法启动
+### 问题 1：容器无法启动
 
-1. 检查端口是否被占用：
+**检查日志**：
 ```bash
-sudo lsof -i :7863
+docker logs voice-text-tts
 ```
 
-2. 查看容器日志：
+**常见原因**：
+- 端口被占用：更换端口映射
+- 权限问题：检查数据目录权限
+- 配置错误：检查环境变量
+
+### 问题 2：无法访问 Web 界面
+
+**检查容器状态**：
 ```bash
-docker logs voice_text_tts_app
+docker ps | grep voice-text-tts
 ```
 
-### 无法访问 Web 界面
-
-1. 检查容器是否在运行：
+**检查端口映射**：
 ```bash
-docker ps | grep voice_text_tts_app
+docker port voice-text-tts
 ```
 
-2. 检查健康状态：
-```bash
-docker inspect --format='{{.State.Health.Status}}' voice_text_tts_app
-```
-
-3. 确认防火墙设置：
+**检查防火墙**：
 ```bash
 sudo ufw allow 7863
 ```
 
-### API 连接失败
+### 问题 3：音频处理失败
 
-如果应用无法连接到 TTS API 服务：
+**验证 FFmpeg**：
+```bash
+docker exec voice-text-tts ffmpeg -version
+```
 
-1. 使用 `host.docker.internal` 访问宿主机服务（Docker Desktop）
-2. 使用宿主机实际 IP 地址（Linux Docker）
-3. 确认 API 服务正在运行且可访问
+**检查音频文件**：
+- 确保格式支持（WAV/MP3/M4A）
+- 检查文件大小和时长
 
-## 依赖说明
+### 问题 4：镜像构建失败
 
-本项目依赖以下核心库（版本见 [requirements.txt](../voice_text_tts/requirements.txt)）：
+**清理 Docker 缓存**：
+```bash
+docker builder prune
+```
 
-- **gradio** (>=6.0.0): Web 界面框架
-- **huggingface_hub** (>=0.23.0): Hugging Face 集成
-- **numpy** (>=1.24.0): 数值计算
-- **ffmpeg-python**, **pydub**, **ffmpy**: 音频处理
-- **requests** (>=2.31.0): HTTP 请求
-- **websockets** (>=12.0): WebSocket 支持
+**重新构建（不使用缓存）**：
+```bash
+docker build --no-cache -t voice-text-tts:latest .
+```
 
-## 系统要求
+### 问题 5：ASR 功能不可用
 
-容器内已安装以下系统依赖：
+**启用 ASR**：
+```bash
+docker run -e ASR_ENABLED=true -e ASR_BACKEND_TYPE=funasr ...
+```
 
-- **ffmpeg**: 音频/视频处理
-- **gcc/g++**: 编译工具
+**检查 ASR 服务连接**：
+- 确保 ASR WebSocket 服务可访问
+- 检查网络配置
+
+## 安全建议
+
+1. **不要在生产环境暴露到公网**：使用反向代理（Nginx/Caddy）
+2. **定期更新镜像**：重新构建以获取安全补丁
+3. **限制容器权限**：避免使用 `--privileged`
+4. **配置防火墙**：只开放必要端口
+5. **监控日志**：定期检查异常访问
+
+## 生产部署建议
+
+### 使用 Nginx 反向代理
+
+```nginx
+server {
+    listen 80;
+    server_name tts.example.com;
+
+    location / {
+        proxy_pass http://localhost:7863;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### 启用 HTTPS
+
+使用 Let's Encrypt：
+
+```bash
+sudo certbot --nginx -d tts.example.com
+```
+
+### 配置自动重启
+
+```yaml
+restart: unless-stopped
+```
+
+### 监控和日志
+
+集成 Prometheus + Grafana 监控：
+
+```yaml
+services:
+  voice-text-tts:
+    # ... 其他配置
+    labels:
+      - "prometheus.scrape=true"
+      - "prometheus.port=7863"
+```
+
+## 更新升级
+
+### 更新应用
+
+1. 拉取最新代码
+2. 重新构建镜像：
+
+```bash
+./build.sh
+```
+
+3. 重启容器：
+
+```bash
+./start.sh
+```
+
+### 备份数据
+
+```bash
+# 备份预设
+tar -czf presets_backup_$(date +%Y%m%d).tar.gz voice_text_tts_docker/presets
+
+# 备份临时文件（可选）
+tar -czf temp_backup_$(date +%Y%m%d).tar.gz voice_text_tts_docker/temp
+```
+
+### 恢复数据
+
+```bash
+# 恢复预设
+tar -xzf presets_backup_20260128.tar.gz
+```
+
+## 开发调试
+
+### 挂载源代码
+
+用于开发时实时修改代码：
+
+```bash
+docker run -d \
+    -v $(pwd)/../voice_text_tts:/app \
+    -p 7863:7863 \
+    voice-text-tts:latest
+```
+
+### 交互式调试
+
+```bash
+docker run -it --rm \
+    -v $(pwd)/../voice_text_tts:/app \
+    voice-text-tts:latest \
+    bash
+```
+
+## 技术栈
+
+- **基础镜像**：Python 3.13 Slim
+- **Web 框架**：Gradio 6.2.0
+- **音频处理**：FFmpeg + pydub
+- **通信协议**：HTTP + WebSocket
+- **容器化**：Docker + Docker Compose
+
+## 贡献和反馈
+
+如有问题或建议，请提交 Issue 或 Pull Request。
 
 ## 许可证
 
-请参考主项目的许可证文件。
+与主项目保持一致。
 
-## 支持
+## 相关链接
 
-如有问题，请查看主项目文档或提交 Issue。
+- [Docker 官方文档](https://docs.docker.com/)
+- [Docker Compose 文档](https://docs.docker.com/compose/)
+- [Gradio 官方文档](https://www.gradio.app/docs/)
+
+---
+
+**最后更新**：2026-01-28

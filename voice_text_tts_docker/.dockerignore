@@ -1,5 +1,10 @@
-# Python
-__pycache__/
+# Git 相关
+.git
+.gitignore
+.gitattributes
+
+# Python 缓存
+__pycache__
 *.py[cod]
 *$py.class
 *.so
@@ -9,66 +14,49 @@ dist/
 build/
 *.egg
 
-# Git
-.git/
-.gitignore
-.gitattributes
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv
 
-# IDE
+# IDE 相关
 .vscode/
 .idea/
 *.swp
 *.swo
-*.sublime-*
-.history/
-
-# OS
+*~
 .DS_Store
-Thumbs.db
-*.log
 
-# Docker
+# 测试相关
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# 文档
+*.md
+README*
+docs/
+ASR_README.md
+
+# 配置示例
+config.example.py
+
+# 临时文件
+*.log
+*.tmp
+temp/
+tmp/
+presets/
+
+# Docker 相关
 Dockerfile
 docker-compose.yml
 .dockerignore
-.docker
+voice_text_tts_docker/
 
-# Documentation
-README.md
-*.md
-docs/
-
-# Environment
-.env
-.env.*
-*.local
-
-# Cache
-.cache/
-*.cache
-.pytest_cache/
-.mypy_cache/
-.coverage
-htmlcov/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-.nox/
-
-# CI/CD
-.github/
-.gitlab-ci.yml
-.travis.yml
-azure-pipelines.yml
-
-# Claude
-.claude/
-
-# 临时文件
-*.tmp
-*.temp
+# 其他
 *.bak
-*~
+*.swp
+.env

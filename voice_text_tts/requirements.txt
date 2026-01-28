@@ -2,7 +2,7 @@
 # Python 3.12+
 
 # Gradio界面框架
-gradio==6.2.0
+gradio==6.3.0
 
 # Hugging Face Hub（版本兼容）
 huggingface_hub>=0.23.0
