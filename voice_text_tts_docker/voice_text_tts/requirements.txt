@@ -1,5 +1,5 @@
 # 语音生成功能 - Python依赖包
-# Python 3.12
+# Python 3.12+
 
 # Gradio界面框架
 gradio>=6.0.0
