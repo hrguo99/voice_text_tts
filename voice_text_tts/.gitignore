@@ -52,3 +52,35 @@ flagged/
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# 模型文件和数据文件
+*.tar.gz
+*.tar
+*.zip
+*.pth
+*.pt
+*.bin
+*.onnx
+*_model/
+models/
+FUNASR_model/
+tts_model/
+
+# 预设文件（保留config.example.py）
+presets/
+voice_presets/
+
+# 文档和临时说明
+*_REFERENCE.md
+*_SUMMARY.md
+GIT_COMMIT*.md
+prompt.txt
+skills*.txt
+
+# 其他项目目录
+cv_gradio/
+guohaoran/
+voice_tts/
+
+# Claude配置
+.claude/

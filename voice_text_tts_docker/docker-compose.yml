@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: voice_text_tts_app
     ports:
-      - "${SERVER_PORT:-7862}:7862"
+      - "${SERVER_PORT:-7863}:7863"
     environment:
       # API配置
       - API_HOST=${API_HOST:-127.0.0.1}
@@ -19,10 +19,13 @@ services:
 
       # 服务器配置
       - SERVER_NAME=0.0.0.0
-      - SERVER_PORT=${SERVER_PORT:-7862}
+      - SERVER_PORT=${SERVER_PORT:-7863}
 
       # 文本限制
       - MAX_TEXT_LENGTH=${MAX_TEXT_LENGTH:-1000}
+
+      # 预设配置
+      - PRESETS_DIR=${PRESETS_DIR:-}
 
       # ASR配置
       - ASR_ENABLED=${ASR_ENABLED:-false}
@@ -39,7 +42,7 @@ services:
       - ASR_FUNASR_USE_ITN=${ASR_FUNASR_USE_ITN:-true}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://0.0.0.0:7862', timeout=5)"]
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://0.0.0.0:7863', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -29,7 +29,7 @@ RUN pip install --no-cache-dir --upgrade pip \
     -r requirements.txt
 
 # 暴露端口
-EXPOSE 7862
+EXPOSE 7863
 
 # 设置环境变量（可通过 docker run -e 覆盖）
 ENV API_HOST=host.docker.internal
@@ -37,7 +37,7 @@ ENV API_PORT=50000
 ENV API_MODE=zero_shot
 ENV PROMPT_TEXT="You are a helpful assistant.<|endofprompt|>"
 ENV SERVER_NAME=0.0.0.0
-ENV SERVER_PORT=7862
+ENV SERVER_PORT=7863
 ENV MAX_TEXT_LENGTH=1000
 ENV ASR_ENABLED=false
 ENV ASR_BACKEND_TYPE=funasr
@@ -49,7 +49,7 @@ RUN touch /.dockerenv
 
 # 健康检查（增加启动等待时间并使用更简单的检查方式）
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import socket; s=socket.socket(); s.connect(('127.0.0.1', 7862)); s.close()" || exit 1
+    CMD python -c "import socket; s=socket.socket(); s.connect(('127.0.0.1', 7863)); s.close()" || exit 1
 
 # 启动应用
 CMD ["python", "app.py"]
