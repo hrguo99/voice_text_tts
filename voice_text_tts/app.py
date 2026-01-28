@@ -1351,6 +1351,25 @@ def create_interface() -> gr.Blocks:
                     audio_upload, audio_mic, prompt_audio_text, text_input, step3_summary, output_audio, output_error, progress_bar, generate_btn, audio_trim_warning, preset_save_status]
         )
 
+        # 页面加载时初始化预设显示
+        def init_presets_on_load():
+            """页面加载/刷新时初始化预设组件"""
+            has_presets = bool(preset_manager.get_presets())
+            return (
+                gr.update(visible=has_presets),  # preset_title
+                gr.update(value=preset_manager.get_presets_display() if has_presets else "", visible=has_presets),  # preset_list
+                gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], visible=has_presets),  # load_preset_dropdown
+                gr.update(visible=has_presets),  # load_preset_btn
+                gr.update(visible=has_presets),  # delete_preset_btn
+                gr.update(visible=has_presets),  # preset_divider
+            )
+
+        app.load(
+            fn=init_presets_on_load,
+            inputs=[],
+            outputs=[preset_title, preset_list, load_preset_dropdown, load_preset_btn, delete_preset_btn, preset_divider]
+        )
+
     return app
 
 

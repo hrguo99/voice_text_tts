@@ -1,57 +1,52 @@
-version: '3.8'
-
 services:
   voice-text-tts:
     build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: voice_text_tts_app
+      context: ..
+      dockerfile: voice_text_tts_docker/Dockerfile
+    image: voice-text-tts:latest
+    container_name: voice-text-tts
+    restart: unless-stopped
     ports:
-      - "${SERVER_PORT:-7863}:7863"
+      - "7863:7863"
+    extra_hosts:
+      # Linux 上需要此配置才能使用 host.docker.internal 访问宿主机
+      - "host.docker.internal:host-gateway"
     environment:
-      # API配置
-      - API_HOST=${API_HOST:-127.0.0.1}
-      - API_PORT=${API_PORT:-50000}
-      - API_MODE=${API_MODE:-zero_shot}
-
-      # Prompt配置
-      - PROMPT_TEXT=${PROMPT_TEXT:-You are a helpful assistant.<|endofprompt|>}
-
+      # TTS API 配置（使用 host.docker.internal 访问宿主机上的 TTS API）
+      - API_HOST=host.docker.internal
+      - API_PORT=50000
+      - API_MODE=zero_shot
+      
       # 服务器配置
       - SERVER_NAME=0.0.0.0
-      - SERVER_PORT=${SERVER_PORT:-7863}
+      - SERVER_PORT=7863
+      
+      # ASR 配置
+      - ASR_ENABLED=false
+      - ASR_BACKEND_TYPE=funasr
+      
+      # 限制配置
+      - MAX_TEXT_LENGTH=1000
 
-      # 文本限制
-      - MAX_TEXT_LENGTH=${MAX_TEXT_LENGTH:-1000}
+      # 预设目录配置（使用持久化目录，避免重启清空）
+      - PRESETS_DIR=/app/presets
 
-      # 预设配置
-      - PRESETS_DIR=${PRESETS_DIR:-}
-
-      # ASR配置
-      - ASR_ENABLED=${ASR_ENABLED:-false}
-      - ASR_BACKEND_TYPE=${ASR_BACKEND_TYPE:-funasr}
-
-      # ASR WebSocket配置
-      - ASR_FUNASR_URI=${ASR_FUNASR_URI:-ws://localhost:10095/ws}
-      - ASR_FUNASR_MODE=${ASR_FUNASR_MODE:-2pass-offline}
-      - ASR_FUNASR_CHUNK_SIZE=${ASR_FUNASR_CHUNK_SIZE:-[5, 10, 5]}
-      - ASR_FUNASR_CHUNK_INTERVAL=${ASR_FUNASR_CHUNK_INTERVAL:-10}
-      - ASR_FUNASR_ENCODER_CHUNK_LOOK_BACK=${ASR_FUNASR_ENCODER_CHUNK_LOOK_BACK:-4}
-      - ASR_FUNASR_DECODER_CHUNK_LOOK_BACK=${ASR_FUNASR_DECODER_CHUNK_LOOK_BACK:-0}
-      - ASR_FUNASR_HOTWORDS=${ASR_FUNASR_HOTWORDS:-{}}
-      - ASR_FUNASR_USE_ITN=${ASR_FUNASR_USE_ITN:-true}
     volumes:
+      # 持久化预设数据
       - ./presets:/app/presets
-    restart: unless-stopped
+      # 持久化临时文件
+      - ./temp:/app/temp
+      
+    networks:
+      - voice-tts-network
+      
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://0.0.0.0:7863', timeout=5)"]
+      test: ["CMD", "python", "-c", "import socket; s = socket.socket(); s.connect(('127.0.0.1', 7863)); s.close()"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
-    networks:
-      - voice_tts_network
+      start_period: 40s
 
 networks:
-  voice_tts_network:
+  voice-tts-network:
     driver: bridge
