@@ -204,8 +204,248 @@ class VoicePresetManager:
 preset_manager = VoicePresetManager()
 
 
-def create_interface() -> gr.Blocks:
-    """创建Gradio界面"""
+def create_interface() -> tuple[gr.Blocks, str]:
+    """创建Gradio界面
+
+    Returns:
+        tuple: (app, realtime_audio_js) - Gradio界面和JavaScript代码
+    """
+
+    # Web Audio API JavaScript for realtime playback (user-controlled)
+    realtime_audio_js = """
+    async function() {
+        // 流式音频播放器 - 用户控制播放
+        class StreamingAudioPlayer {
+            constructor() {
+                this.audioContext = null;
+                this.sampleRate = 24000;
+                this.audioChunks = [];      // 存储解码后的 Float32Array
+                this.bufferedDuration = 0;  // 已缓冲的总时长（秒）
+                this.playedDuration = 0;    // 已播放的时长（秒）
+                this.isUserPlaying = false; // 用户是否已点击播放
+                this.isReceiving = false;   // 是否正在接收数据
+                this.nextStartTime = 0;
+                this.playIndex = 0;         // 当前播放到第几个块
+                this.initialized = false;
+                this.schedulerInterval = null;
+            }
+
+            async init() {
+                if (this.initialized) return;
+                try {
+                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                        sampleRate: this.sampleRate
+                    });
+                    this.initialized = true;
+                    console.log('[StreamingPlayer] AudioContext initialized');
+                } catch (e) {
+                    console.error('[StreamingPlayer] Failed to create AudioContext:', e);
+                }
+            }
+
+            // 添加音频块到缓冲区（不自动播放）
+            addChunk(base64Data) {
+                if (!base64Data) return;
+
+                try {
+                    // Decode base64 to Float32Array
+                    const binaryString = atob(base64Data);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+
+                    const int16Array = new Int16Array(bytes.buffer);
+                    const float32Array = new Float32Array(int16Array.length);
+                    for (let i = 0; i < int16Array.length; i++) {
+                        float32Array[i] = int16Array[i] / 32768.0;
+                    }
+
+                    const chunkDuration = float32Array.length / this.sampleRate;
+                    this.audioChunks.push(float32Array);
+                    this.bufferedDuration += chunkDuration;
+
+                    console.log('[StreamingPlayer] Chunk added, buffered:', this.bufferedDuration.toFixed(2), 's');
+                    this.updateUI();
+
+                    // 如果用户已经开始播放，继续调度
+                    if (this.isUserPlaying) {
+                        this.scheduleNextChunks();
+                    }
+                } catch (e) {
+                    console.error('[StreamingPlayer] Error adding chunk:', e);
+                }
+            }
+
+            // 用户点击播放
+            async userPlay() {
+                await this.init();
+                if (!this.audioContext) return;
+
+                if (this.audioContext.state === 'suspended') {
+                    await this.audioContext.resume();
+                }
+
+                this.isUserPlaying = true;
+                this.nextStartTime = this.audioContext.currentTime;
+                console.log('[StreamingPlayer] User started playback');
+
+                this.scheduleNextChunks();
+                this.updateUI();
+            }
+
+            // 用户点击暂停
+            userPause() {
+                this.isUserPlaying = false;
+                console.log('[StreamingPlayer] User paused');
+                this.updateUI();
+            }
+
+            // 调度播放缓冲区中的音频块
+            scheduleNextChunks() {
+                if (!this.isUserPlaying || !this.audioContext) return;
+
+                const currentTime = this.audioContext.currentTime;
+
+                // 调度未播放的块
+                while (this.playIndex < this.audioChunks.length) {
+                    const chunk = this.audioChunks[this.playIndex];
+                    const audioBuffer = this.audioContext.createBuffer(1, chunk.length, this.sampleRate);
+                    audioBuffer.getChannelData(0).set(chunk);
+
+                    const source = this.audioContext.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(this.audioContext.destination);
+
+                    const startTime = Math.max(currentTime, this.nextStartTime);
+                    source.start(startTime);
+
+                    this.nextStartTime = startTime + audioBuffer.duration;
+                    this.playedDuration += audioBuffer.duration;
+                    this.playIndex++;
+
+                    console.log('[StreamingPlayer] Scheduled chunk', this.playIndex, 'at', startTime.toFixed(2));
+                }
+            }
+
+            // 更新 UI 显示
+            updateUI() {
+                const playerUI = document.getElementById('streaming-player-ui');
+                if (!playerUI) return;
+
+                const playBtn = playerUI.querySelector('.play-btn');
+                const statusText = playerUI.querySelector('.status-text');
+                const bufferBar = playerUI.querySelector('.buffer-bar');
+
+                if (playBtn) {
+                    playBtn.textContent = this.isUserPlaying ? '⏸ 暂停' : '▶ 播放';
+                    playBtn.disabled = this.audioChunks.length === 0;
+                }
+
+                if (statusText) {
+                    if (this.audioChunks.length === 0) {
+                        statusText.textContent = '等待接收音频...';
+                    } else if (this.isUserPlaying) {
+                        statusText.textContent = `播放中 | 已缓冲 ${this.bufferedDuration.toFixed(1)}s`;
+                    } else {
+                        statusText.textContent = `已缓冲 ${this.bufferedDuration.toFixed(1)}s | 点击播放`;
+                    }
+                }
+
+                if (bufferBar) {
+                    // 显示缓冲进度（假设最大60秒）
+                    const percent = Math.min(100, (this.bufferedDuration / 60) * 100);
+                    bufferBar.style.width = percent + '%';
+                }
+            }
+
+            // 设置接收状态
+            setReceiving(receiving) {
+                this.isReceiving = receiving;
+                this.updateUI();
+            }
+
+            // 重置播放器
+            reset() {
+                this.isUserPlaying = false;
+                this.audioChunks = [];
+                this.bufferedDuration = 0;
+                this.playedDuration = 0;
+                this.playIndex = 0;
+                this.nextStartTime = 0;
+                if (this.audioContext) {
+                    this.audioContext.close();
+                    this.audioContext = null;
+                    this.initialized = false;
+                }
+                console.log('[StreamingPlayer] Reset');
+            }
+        }
+
+        // Create global player instance
+        window.streamingPlayer = window.streamingPlayer || new StreamingAudioPlayer();
+
+        // 全局播放控制函数
+        window.toggleStreamingPlay = async function() {
+            if (window.streamingPlayer.isUserPlaying) {
+                window.streamingPlayer.userPause();
+            } else {
+                await window.streamingPlayer.userPlay();
+            }
+        };
+
+        // Monitor audio_data_holder changes
+        const setupObserver = () => {
+            const holder = document.getElementById('audio-data-holder');
+            if (!holder) {
+                console.log('[StreamingPlayer] Waiting for audio-data-holder...');
+                setTimeout(setupObserver, 500);
+                return;
+            }
+
+            console.log('[StreamingPlayer] Found audio-data-holder, setting up observer');
+
+            let lastTs = '';
+            const processChunk = () => {
+                // 检查重置标志
+                const resetEl = holder.querySelector('.audio-reset');
+                if (resetEl) {
+                    const resetTs = resetEl.getAttribute('data-ts');
+                    if (resetTs === '0') {
+                        console.log('[StreamingPlayer] Reset signal received');
+                        window.streamingPlayer.reset();
+                        lastTs = '';
+                        return;
+                    }
+                }
+
+                // 处理音频块
+                const chunk = holder.querySelector('.audio-chunk');
+                if (chunk) {
+                    const ts = chunk.getAttribute('data-ts');
+                    if (ts && ts !== lastTs) {
+                        lastTs = ts;
+                        const audioData = chunk.getAttribute('data-audio');
+                        if (audioData) {
+                            console.log('[StreamingPlayer] New chunk received, ts:', ts);
+                            window.streamingPlayer.addChunk(audioData);
+                        }
+                    }
+                }
+            };
+
+            const observer = new MutationObserver((mutations) => {
+                processChunk();
+            });
+            observer.observe(holder, { childList: true, subtree: true, characterData: true });
+
+            setInterval(processChunk, 100);
+        };
+
+        setupObserver();
+        console.log('[StreamingPlayer] Streaming audio player initialized');
+    }
+    """
 
     # 创建界面
     with gr.Blocks(title="智能语音克隆演示系统") as app:
@@ -436,23 +676,44 @@ def create_interface() -> gr.Blocks:
                 - 点击"重新开始"可以更换参考音频
                 """, elem_classes=["instructions"])
 
-                # 进度条（默认隐藏）
-                progress_bar = gr.Slider(
-                    label="生成进度 0.00%",
-                    value=0,
-                    minimum=0,
-                    maximum=100,
-                    step=0.01,
+                # 自定义进度条（替代 Slider，支持平滑 CSS 动画）
+                progress_bar = gr.HTML(
+                    value='',
                     visible=False,
-                    interactive=False,
-                    elem_classes=["progress-slider"]
+                    elem_classes=["custom-progress-container"]
+                )
+
+                # 状态日志组件（折叠显示）
+                with gr.Accordion("处理日志", open=False, visible=True, elem_classes=["status-log-accordion"]) as status_log_accordion:
+                    status_log = gr.Textbox(
+                        label="",
+                        value="",
+                        lines=4,
+                        max_lines=8,
+                        interactive=False,
+                        elem_classes=["status-log"],
+                        show_label=False
+                    )
+
+                # 实时音频播放器（隐藏，用于传输音频数据）
+                audio_data_holder = gr.HTML(
+                    value="",
+                    visible=False,
+                    elem_id="audio-data-holder"
                 )
 
                 # 输出区域
                 with gr.Column(elem_classes=["output-section"]):
                     gr.Markdown("### 输出结果", elem_classes=["module-title"])
 
-                    # 输出音频
+                    # 实时播放控制区
+                    realtime_player = gr.HTML(
+                        value='',
+                        visible=False,
+                        elem_classes=["realtime-player-container"]
+                    )
+
+                    # 输出音频（完成后显示，可下载）
                     output_audio = gr.Audio(
                         label="生成的语音",
                         type="filepath",
@@ -493,7 +754,7 @@ def create_interface() -> gr.Blocks:
                 gr.update(value="", visible=False),  # step3_summary (清空并隐藏)
                 gr.update(value=None),     # output_audio (清空)
                 gr.update(visible=False),  # output_error
-                gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar
+                gr.update(value="", visible=False),  # progress_bar
                 gr.update(visible=False, value=""),  # audio_trim_warning (隐藏警告框)
                 gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
                 # 预设相关组件
@@ -524,7 +785,7 @@ def create_interface() -> gr.Blocks:
                 gr.update(value="", visible=False),  # step3_summary (清空并隐藏)
                 gr.update(value=None),     # output_audio (清空)
                 gr.update(visible=False),  # output_error
-                gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar
+                gr.update(value="", visible=False),  # progress_bar
                 gr.update(visible=False, value=""),  # audio_trim_warning (隐藏警告框)
                 gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
                 gr.update(interactive=False),  # save_preset_btn (初始禁用，等输入文本后启用)
@@ -560,7 +821,7 @@ def create_interface() -> gr.Blocks:
                 gr.update(value=summary, visible=True),  # step3_summary (显示)
                 gr.update(value=None),     # output_audio (清空之前的输出)
                 gr.update(visible=False),  # output_error
-                gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar
+                gr.update(value="", visible=False),  # progress_bar
                 gr.update(visible=False, value=""),  # audio_trim_warning (隐藏警告框)
                 gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
             ]
@@ -643,7 +904,7 @@ def create_interface() -> gr.Blocks:
                 gr.update(value="", visible=False),  # step3_summary (清空并隐藏)
                 gr.update(value=None, visible=False),  # output_audio (清空并隐藏)
                 gr.update(value="", visible=False),    # output_error (清空并隐藏)
-                gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar (重置)
+                gr.update(value="", visible=False),  # progress_bar (重置)
                 gr.update(visible=False, value=""),  # audio_trim_warning (强制隐藏警告框)
                 gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
                 gr.update(value=audio_upload_file),  # audio_upload (保持原值以触发change事件)
@@ -786,7 +1047,7 @@ def create_interface() -> gr.Blocks:
                 # 其他组件
                 gr.update(value=None),     # output_audio
                 gr.update(visible=False),  # output_error
-                gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar
+                gr.update(value="", visible=False),  # progress_bar
                 gr.update(visible=False, value=""),  # audio_trim_warning (隐藏警告框)
                 gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
             )
@@ -902,20 +1163,110 @@ def create_interface() -> gr.Blocks:
 
                 return min(92, progress)
 
-        def _update_progress(progress_value: float, label: str):
-            """统一的进度更新接口"""
-            return gr.update(value=progress_value, visible=True, label=f"生成进度 {progress_value:.2f}%")
+        def _create_progress_html(progress_value: float, status_text: str = "") -> str:
+            """生成自定义进度条 HTML"""
+            status_display = f'<span class="progress-status">{status_text}</span>' if status_text else ''
+            return f'''
+            <div class="custom-progress-bar">
+                <div class="progress-label">生成进度 {progress_value:.1f}%</div>
+                <div class="progress-track">
+                    <div class="progress-fill" style="width: {progress_value}%"></div>
+                </div>
+                {status_display}
+            </div>
+            '''
+
+        def _update_progress(progress_value: float, status_text: str = ""):
+            """统一的进度更新接口 - 返回 HTML 进度条"""
+            html = _create_progress_html(progress_value, status_text)
+            return gr.update(value=html, visible=True)
+
+        def _create_realtime_player_html(is_receiving: bool = False, buffered_duration: float = 0, show_player: bool = True) -> str:
+            """生成流式播放器 HTML（用户控制播放）"""
+            if not show_player:
+                return ''
+
+            return f'''
+            <div class="streaming-player" id="streaming-player-ui">
+                <div class="player-header">
+                    <span class="player-icon">🎵</span>
+                    <span class="player-title">实时音频预览</span>
+                </div>
+                <div class="player-controls">
+                    <button class="play-btn" onclick="window.toggleStreamingPlay()" disabled>
+                        ▶ 播放
+                    </button>
+                    <span class="status-text">等待接收音频...</span>
+                </div>
+                <div class="buffer-track">
+                    <div class="buffer-bar" style="width: 0%"></div>
+            </div>
+            '''
+
+        # 阶段描述映射
+        STAGE_DESCRIPTIONS = {
+            'init': '初始化...',
+            'validate': '验证输入参数',
+            'convert': '转换音频格式',
+            'prepare': '准备 API 请求',
+            'request': '发送请求到 TTS 服务',
+            'wait_model': '等待模型初始化',
+            'generating': '正在生成音频',
+            'receiving': '接收音频数据',
+            'playing': '实时播放中',
+            'processing': '处理音频数据',
+            'saving': '保存音频文件',
+            'done': '生成完成'
+        }
 
         # 绑定事件
         def handle_generate(audio_upload_file, audio_mic_file, text, prompt_audio_text_val):
-            """处理生成请求"""
+            """处理生成请求 - 支持实时音频播放"""
+            import base64
             # 优先使用上传的音频，如果没有则使用录制的音频
             reference_audio = audio_upload_file or audio_mic_file
 
             import time
+            from datetime import datetime
             start_time = time.time()
             last_update_time = 0
             last_progress = 0
+
+            # 日志管理
+            log_lines = []
+            max_log_lines = 8
+
+            def add_log(message: str) -> str:
+                """添加日志并返回完整日志文本"""
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                log_lines.append(f"[{timestamp}] {message}")
+                # 保持最多 max_log_lines 行
+                while len(log_lines) > max_log_lines:
+                    log_lines.pop(0)
+                return "\n".join(log_lines)
+
+            def get_log_update(message: str = None):
+                """获取日志组件更新"""
+                if message:
+                    log_text = add_log(message)
+                else:
+                    log_text = "\n".join(log_lines)
+                return gr.update(value=log_text)
+
+            def get_audio_chunk_update(audio_data: bytes = None):
+                """获取音频数据更新（Base64编码）"""
+                import time as _time
+                if audio_data:
+                    encoded = base64.b64encode(audio_data).decode('utf-8')
+                    # 使用带时间戳的 div 来确保每次更新都是唯一的，触发 MutationObserver
+                    timestamp = int(_time.time() * 1000)
+                    return gr.update(value=f'<div class="audio-chunk" data-audio="{encoded}" data-ts="{timestamp}"></div>')
+                return gr.update(value="")
+
+            def get_player_update(is_receiving: bool = False, show_player: bool = True):
+                """获取流式播放器 UI 更新"""
+                html = _create_realtime_player_html(is_receiving=is_receiving, show_player=show_player)
+                return gr.update(value=html, visible=show_player)
 
             # 进度常量定义
             PROGRESS_INITIAL = 0
@@ -928,20 +1279,37 @@ def create_interface() -> gr.Blocks:
             PROGRESS_SAVING = 98
             PROGRESS_DONE = 100
 
-            # 步骤1: 验证输入（显示进度条）
-            yield _update_progress(PROGRESS_INITIAL, f"生成进度 {PROGRESS_INITIAL:.2f}%"), gr.update(visible=False), gr.update(visible=False)
+            # 实时播放统计
+            total_audio_duration = 0.0
+            SAMPLE_RATE = 24000
+
+            # 步骤1: 验证输入（显示进度条和播放器，重置播放器状态）
+            yield (_update_progress(PROGRESS_INITIAL, STAGE_DESCRIPTIONS['init']),
+                   get_log_update(STAGE_DESCRIPTIONS['init']),
+                   gr.update(value='<div class="audio-reset" data-ts="0"></div>'),  # 重置播放器
+                   get_player_update(False, True),
+                   gr.update(visible=False),
+                   gr.update(visible=False))
 
             if not reference_audio:
-                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 请提供参考音频")
+                yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                       gr.update(visible=False), gr.update(visible=False),
+                       gr.update(visible=True, value="### ❌ 请提供参考音频"))
                 return
             if not text or text.strip() == "":
-                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 请输入要合成的文本")
+                yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                       gr.update(visible=False), gr.update(visible=False),
+                       gr.update(visible=True, value="### ❌ 请输入要合成的文本"))
                 return
             if not prompt_audio_text_val or prompt_audio_text_val.strip() == "":
-                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value="### 请输入参考音频对应的文本内容，或点击\"提取音频文字\"按钮自动识别")
+                yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                       gr.update(visible=False), gr.update(visible=False),
+                       gr.update(visible=True, value="### 请输入参考音频对应的文本内容，或点击\"提取音频文字\"按钮自动识别"))
                 return
             if len(text) > 1000:
-                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 文本长度超过1000字符限制")
+                yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                       gr.update(visible=False), gr.update(visible=False),
+                       gr.update(visible=True, value="### ❌ 文本长度超过1000字符限制"))
                 return
 
             # 验证音频时长（3-30秒）
@@ -957,10 +1325,14 @@ def create_interface() -> gr.Blocks:
                         duration = frames / float(rate)
 
                         if duration < 3:
-                            yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 音频时长不足3秒（当前：{duration:.1f}秒），请上传3-30秒的音频")
+                            yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                                   gr.update(visible=False), gr.update(visible=False),
+                                   gr.update(visible=True, value=f"### ❌ 音频时长不足3秒（当前：{duration:.1f}秒），请上传3-30秒的音频"))
                             return
                         if duration > 30:
-                            yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 音频时长超过30秒限制（当前：{duration:.1f}秒），请上传3-30秒的音频")
+                            yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                                   gr.update(visible=False), gr.update(visible=False),
+                                   gr.update(visible=True, value=f"### ❌ 音频时长超过30秒限制（当前：{duration:.1f}秒），请上传3-30秒的音频"))
                             return
                 except:
                     # 如果不是WAV格式，暂时跳过验证（会在转换时处理）
@@ -970,14 +1342,24 @@ def create_interface() -> gr.Blocks:
                 pass
 
             # 步骤2: 转换音频格式
-            yield _update_progress(PROGRESS_VALIDATED, f"生成进度 {PROGRESS_VALIDATED:.2f}%"), gr.update(visible=False), gr.update(visible=False)
+            yield (_update_progress(PROGRESS_VALIDATED, STAGE_DESCRIPTIONS['validate']),
+                   get_log_update(STAGE_DESCRIPTIONS['validate']),
+                   gr.update(value=""),
+                   get_player_update(False, True),
+                   gr.update(visible=False),
+                   gr.update(visible=False))
 
             converter = AudioConverter()
             if not reference_audio.endswith('.wav'):
                 reference_audio = converter.convert_to_wav(reference_audio)
 
             # 步骤3: 准备API请求
-            yield _update_progress(PROGRESS_CONVERTED, f"生成进度 {PROGRESS_CONVERTED:.2f}%"), gr.update(visible=False), gr.update(visible=False)
+            yield (_update_progress(PROGRESS_CONVERTED, STAGE_DESCRIPTIONS['convert']),
+                   get_log_update(STAGE_DESCRIPTIONS['convert']),
+                   gr.update(value=""),
+                   get_player_update(False, True),
+                   gr.update(visible=False),
+                   gr.update(visible=False))
 
             final_prompt_text = f"{PROMPT_TEXT}{prompt_audio_text_val}"
             payload = {
@@ -986,7 +1368,12 @@ def create_interface() -> gr.Blocks:
             }
 
             # 步骤4: 发送请求到API
-            yield _update_progress(PROGRESS_REQUEST_SENT, f"生成进度 {PROGRESS_REQUEST_SENT:.2f}%"), gr.update(visible=False), gr.update(visible=False)
+            yield (_update_progress(PROGRESS_REQUEST_SENT, STAGE_DESCRIPTIONS['request']),
+                   get_log_update(STAGE_DESCRIPTIONS['request']),
+                   gr.update(value=""),
+                   get_player_update(False, True),
+                   gr.update(visible=False),
+                   gr.update(visible=False))
 
             try:
                 with open(reference_audio, 'rb') as audio_file:
@@ -1006,180 +1393,207 @@ def create_interface() -> gr.Blocks:
                     last_update_time = time.time() - 1.0  # 确保第一次循环就能触发更新
 
             except FileNotFoundError:
-                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 找不到音频文件 {reference_audio}")
+                yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                       gr.update(visible=False), gr.update(visible=False),
+                       gr.update(visible=True, value=f"### ❌ 找不到音频文件 {reference_audio}"))
                 return
             except requests.exceptions.ConnectTimeout as e:
-                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 连接API超时 - 服务端未响应，请检查API服务是否运行\n\n错误详情: {str(e)}")
+                yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                       gr.update(visible=False), gr.update(visible=False),
+                       gr.update(visible=True, value=f"### ❌ 连接API超时 - 服务端未响应，请检查API服务是否运行\n\n错误详情: {str(e)}"))
                 return
             except requests.exceptions.ReadTimeout as e:
-                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 生成超时 - 文本过长或服务端处理时间过长（超过300秒）\n\n建议：\n1. 缩短文本长度\n2. 检查服务端性能\n\n错误详情: {str(e)}")
+                yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                       gr.update(visible=False), gr.update(visible=False),
+                       gr.update(visible=True, value=f"### ❌ 生成超时 - 文本过长或服务端处理时间过长（超过300秒）\n\n建议：\n1. 缩短文本长度\n2. 检查服务端性能\n\n错误详情: {str(e)}"))
                 return
             except requests.exceptions.ConnectionError as e:
-                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 连接API失败 - {str(e)}")
+                yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                       gr.update(visible=False), gr.update(visible=False),
+                       gr.update(visible=True, value=f"### ❌ 连接API失败 - {str(e)}"))
                 return
             except Exception as e:
-                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 连接API失败 - {str(e)}")
+                yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                       gr.update(visible=False), gr.update(visible=False),
+                       gr.update(visible=True, value=f"### ❌ 连接API失败 - {str(e)}"))
                 return
 
             if response.status_code == 200:
-                # 步骤5: 接收音频数据（带真实进度信息）
-                tts_audio = b''
-                buffer = b''
-                received_chunks = 0  # 本地计数器，用于时间估算
-                first_chunk_received = False
-                last_update_time = time.time() - 1.0
-                has_server_progress = False  # 标记服务端是否提供进度信息
+                # 步骤5: 使用线程接收音频数据，主循环更新进度
+                import threading
+                import queue
 
-                # 预先发送几个进度更新，防止在等待第一个TCP chunk时进度卡住
-                # 这是因为iter_content会阻塞，直到有数据到达才会执行循环
-                import socket
-                try:
-                    # 设置socket超时，让iter_content可以定期返回（即使没有数据）
-                    # 这样我们就能在等待期间更新进度
-                    response.raw._fp.fp._sock.settimeout(0.1)  # 100ms超时
-                except:
-                    pass  # 如果设置失败也没关系，继续使用默认行为
+                # 共享状态
+                audio_queue = queue.Queue()  # 音频数据队列
+                tts_audio_chunks = []  # 收集所有音频块
+                receiver_done = threading.Event()  # 接收完成标志
+                receiver_error = [None]  # 存储错误信息
+                receiver_status = {'stage': 'waiting', 'init_time': 0}  # 接收状态
 
-                try:
-                    # 使用流式响应
-                    for tcp_chunk in response.iter_content(chunk_size=1024, decode_unicode=False):
-                        # 每次循环都检查时间并更新进度（即使没有新数据）
-                        current_time = time.time()
-                        elapsed_time = current_time - start_time
-                        time_since_last_update = (current_time - last_update_time) if last_update_time > 0 else 999
+                def receive_audio_data():
+                    """后台线程：接收音频数据"""
+                    nonlocal tts_audio_chunks
+                    buffer = b''
 
-                        # 基于时间的进度估算（仅在服务端无进度信息时使用）
-                        if not has_server_progress and time_since_last_update >= 0.1:
-                            estimated_progress = _calculate_time_progress(elapsed_time, first_chunk_received)
-                            if estimated_progress is not None:
-                                # 确保不会倒退
-                                estimated_progress = max(estimated_progress, last_progress)
-                                # 确保不会超过接收完成进度
-                                estimated_progress = min(estimated_progress, PROGRESS_RECEIVING_DONE - 1)
-                                yield _update_progress(estimated_progress, f"生成进度 {estimated_progress:.2f}%"), gr.update(visible=False), gr.update(visible=False)
-                                last_progress = estimated_progress
-                                last_update_time = current_time
+                    try:
+                        for tcp_chunk in response.iter_content(chunk_size=4096, decode_unicode=False):
+                            if tcp_chunk:
+                                buffer += tcp_chunk
 
-                        if tcp_chunk:
-                            buffer += tcp_chunk
+                                # 解析buffer中的数据块
+                                while len(buffer) >= 4:
+                                    metadata_length = int.from_bytes(buffer[:4], byteorder='big')
 
-                            # 解析buffer中的数据块（格式: 4字节长度 + JSON + 音频数据）
-                            while len(buffer) >= 4:
-                                metadata_length = int.from_bytes(buffer[:4], byteorder='big')
+                                    if len(buffer) < 4 + metadata_length:
+                                        break
 
-                                if len(buffer) < 4 + metadata_length:
-                                    break
+                                    metadata_json = buffer[4:4 + metadata_length].decode('utf-8')
+                                    metadata = json.loads(metadata_json)
 
-                                metadata_json = buffer[4:4 + metadata_length].decode('utf-8')
-                                metadata = json.loads(metadata_json)
+                                    audio_data_start = 4 + metadata_length
+                                    audio_data_end = audio_data_start + metadata['audio_size']
 
-                                audio_data_start = 4 + metadata_length
-                                audio_data_end = audio_data_start + metadata['audio_size']
+                                    if len(buffer) < audio_data_end:
+                                        break
 
-                                if len(buffer) < audio_data_end:
-                                    break
+                                    audio_chunk = buffer[audio_data_start:audio_data_end]
+                                    buffer = buffer[audio_data_end:]
 
-                                audio_chunk = buffer[audio_data_start:audio_data_end]
-                                tts_audio += audio_chunk
+                                    # 处理初始化标记
+                                    if metadata.get('chunk_index') == -1 and metadata.get('status') == 'initializing':
+                                        receiver_status['stage'] = 'initializing'
+                                        continue
 
-                                buffer = buffer[audio_data_end:]
+                                    # 处理生成开始标记
+                                    if metadata.get('chunk_index') == -2 and metadata.get('status') == 'generating':
+                                        receiver_status['stage'] = 'generating'
+                                        receiver_status['init_time'] = metadata.get('init_time', 0)
+                                        continue
 
-                                # 处理初始化标记（服务端正在初始化模型）
-                                if metadata['chunk_index'] == -1 and metadata.get('status') == 'initializing':
-                                    yield _update_progress(PROGRESS_REQUEST_SENT, f"初始化模型 {PROGRESS_REQUEST_SENT:.2f}%"), gr.update(visible=False), gr.update(visible=False)
-                                    continue
+                                    # 检查是否是结束标记
+                                    if metadata.get('is_final', False):
+                                        receiver_status['stage'] = 'done'
+                                        break
 
-                                # 处理生成开始标记（模型初始化完成，开始生成音频）
-                                if metadata['chunk_index'] == -2 and metadata.get('status') == 'generating':
-                                    init_time = metadata.get('init_time', 0)
-                                    yield _update_progress(PROGRESS_REQUEST_SENT + 1, f"生成音频中 {PROGRESS_REQUEST_SENT + 1:.2f}% (初始化耗时: {init_time:.2f}s)"), gr.update(visible=False), gr.update(visible=False)
-                                    continue
+                                    # 实际音频数据
+                                    if len(audio_chunk) > 0:
+                                        tts_audio_chunks.append(audio_chunk)
+                                        audio_queue.put(audio_chunk)  # 放入队列供实时播放
+                                        receiver_status['stage'] = 'receiving'
 
-                                # 第一次接收到实际音频数据
-                                if not first_chunk_received:
-                                    yield _update_progress(PROGRESS_FIRST_CHUNK, f"生成进度 {PROGRESS_FIRST_CHUNK:.2f}%"), gr.update(visible=False), gr.update(visible=False)
-                                    first_chunk_received = True
-                                    last_progress = PROGRESS_FIRST_CHUNK
-                                    last_update_time = current_time
-                                    received_chunks = 0
+                    except Exception as e:
+                        receiver_error[0] = str(e)
+                    finally:
+                        receiver_done.set()
 
-                                # 检查是否是结束标记
-                                if metadata.get('is_final', False):
-                                    yield _update_progress(PROGRESS_RECEIVING_DONE, f"生成进度 {PROGRESS_RECEIVING_DONE:.2f}%"), gr.update(visible=False), gr.update(visible=False)
-                                    break
+                # 启动接收线程
+                receiver_thread = threading.Thread(target=receive_audio_data, daemon=True)
+                receiver_thread.start()
 
-                                # 更新本地计数器（用于估算）
-                                received_chunks += 1
+                # 主循环：基于时间更新进度，同时处理音频数据
+                # 根据文本长度动态计算预期生成时间
+                # 基准：每个字符约 0.08 秒，最小 8 秒，最大 60 秒
+                text_length = len(text.strip())
+                EXPECTED_DURATION = max(12.0, min(120.0, text_length * 0.16))
+                progress_start_time = time.time()
 
-                                # 使用TTS模型返回的进度信息
-                                total_chunks = metadata.get('total_chunks', -1)
-                                server_progress = metadata.get('progress', -1)
+                while not receiver_done.is_set():
+                    elapsed = time.time() - progress_start_time
 
-                                # 检查是否有 sub-chunk 信息（二次分块）
-                                sub_chunk_index = metadata.get('sub_chunk_index')
-                                sub_chunk_total = metadata.get('sub_chunk_total')
-                                chunk_index = metadata.get('chunk_index', 0)
+                    # 基于时间计算进度（从 PROGRESS_REQUEST_SENT 到 PROGRESS_RECEIVING_DONE）
+                    # 使用缓动函数让进度更自然
+                    time_ratio = min(elapsed / EXPECTED_DURATION, 0.95)  # 最多到95%
+                    # 使用 ease-out 缓动：快速开始，逐渐变慢
+                    eased_ratio = 1 - (1 - time_ratio) ** 2
+                    time_progress = PROGRESS_REQUEST_SENT + eased_ratio * (PROGRESS_RECEIVING_DONE - PROGRESS_REQUEST_SENT)
 
-                                if sub_chunk_index is not None and sub_chunk_total is not None:
-                                    # 使用 sub-chunk 信息计算进度（更细粒度）
-                                    has_server_progress = True
-                                    # 基于 sub-chunk 的进度：已经完成了的 chunk + 当前 chunk 的 sub-chunk 进度
-                                    sub_chunk_progress = (sub_chunk_index + 1) / sub_chunk_total
-                                    # 假设总共有 5 个大 chunk（估算），可以调整这个值
-                                    estimated_total_chunks = max(5, chunk_index + 2)
-                                    server_total_progress = PROGRESS_FIRST_CHUNK + (chunk_index + sub_chunk_progress) / estimated_total_chunks * (PROGRESS_RECEIVING_DONE - PROGRESS_FIRST_CHUNK)
-                                    server_total_progress = min(PROGRESS_RECEIVING_DONE - 1, server_total_progress)
-
-                                    # 每 2% 或最后一个 sub-chunk 时更新（更频繁）
-                                    if abs(server_total_progress - last_progress) >= 2 or metadata.get('is_last_sub_chunk'):
-                                        yield _update_progress(server_total_progress, f"生成进度 {server_total_progress:.2f}%"), gr.update(visible=False), gr.update(visible=False)
-                                        last_progress = server_total_progress
-
-                                elif total_chunks > 0 and server_progress >= 0:
-                                    # 服务端提供了准确的进度信息，使用服务端进度并禁用时间估算
-                                    has_server_progress = True
-                                    server_total_progress = 10 + (server_progress / 100) * 85
-                                    server_total_progress = min(PROGRESS_RECEIVING_DONE, server_total_progress)
-
-                                    chunk_index = metadata['chunk_index']
-                                    is_last_chunk = (chunk_index == total_chunks - 1)
-
-                                    # 只在进度显著变化或最后一个chunk时更新
-                                    if abs(server_total_progress - last_progress) >= 1 or is_last_chunk:
-                                        yield _update_progress(server_total_progress, f"生成进度 {server_total_progress:.2f}%"), gr.update(visible=False), gr.update(visible=False)
-                                        last_progress = server_total_progress
-
-                except requests.exceptions.ChunkedEncodingError:
-                    if len(tts_audio) == 0:
-                        yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 接收数据时连接中断")
-                        return
-                except requests.exceptions.Timeout as e:
-                    if len(tts_audio) == 0:
-                        yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 接收数据超时 - 生成时间过长\n\n建议缩短文本长度或增加服务端性能")
-                        return
+                    # 确定当前阶段
+                    current_stage = receiver_status['stage']
+                    if current_stage == 'initializing':
+                        stage_text = STAGE_DESCRIPTIONS['wait_model']
+                    elif current_stage == 'generating':
+                        init_time = receiver_status.get('init_time', 0)
+                        stage_text = f"{STAGE_DESCRIPTIONS['generating']} (初始化: {init_time:.1f}s)"
+                    elif current_stage == 'receiving':
+                        stage_text = STAGE_DESCRIPTIONS['playing']
                     else:
-                        # 如果已经接收到部分数据，仍然尝试处理
-                        yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ⚠️ 接收数据超时，但已接收 {len(tts_audio)} 字节，尝试处理...")
-                except Exception as e:
-                    if len(tts_audio) == 0:
-                        yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 接收音频数据失败 - {str(e)}")
+                        stage_text = STAGE_DESCRIPTIONS['generating']
+
+                    # 处理队列中的音频数据（用于实时播放）
+                    audio_to_send = None
+                    try:
+                        audio_to_send = audio_queue.get_nowait()
+                        chunk_duration = len(audio_to_send) / 2 / SAMPLE_RATE
+                        total_audio_duration += chunk_duration
+                    except queue.Empty:
+                        pass
+
+                    # 更新进度
+                    yield (_update_progress(time_progress, stage_text),
+                           get_log_update(stage_text if current_stage != 'waiting' else None),
+                           get_audio_chunk_update(audio_to_send) if audio_to_send else gr.update(value=""),
+                           get_player_update(True, True),
+                           gr.update(visible=False),
+                           gr.update(visible=False))
+
+                    # 等待一小段时间
+                    time.sleep(0.05)  # 50ms 更新间隔
+
+                # 检查是否有错误
+                if receiver_error[0]:
+                    if len(tts_audio_chunks) == 0:
+                        yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                               gr.update(visible=False), gr.update(visible=False),
+                               gr.update(visible=True, value=f"### ❌ 接收音频数据失败 - {receiver_error[0]}"))
                         return
+
+                # 处理队列中剩余的音频数据
+                while not audio_queue.empty():
+                    try:
+                        audio_chunk = audio_queue.get_nowait()
+                        chunk_duration = len(audio_chunk) / 2 / SAMPLE_RATE
+                        total_audio_duration += chunk_duration
+                        yield (_update_progress(PROGRESS_RECEIVING_DONE - 1, STAGE_DESCRIPTIONS['playing']),
+                               get_log_update(),
+                               get_audio_chunk_update(audio_chunk),
+                               get_player_update(True, True),
+                               gr.update(visible=False),
+                               gr.update(visible=False))
+                    except queue.Empty:
+                        break
+
+                # 合并所有音频数据
+                tts_audio = b''.join(tts_audio_chunks)
 
                 if len(tts_audio) == 0:
-                    yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value="### ❌ 接收到的音频数据为空")
+                    yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                           gr.update(visible=False), gr.update(visible=False),
+                           gr.update(visible=True, value="### ❌ 接收到的音频数据为空"))
                     return
 
                 # 步骤6: 转换音频数据
-                yield _update_progress(PROGRESS_CONVERTING, f"生成进度 {PROGRESS_CONVERTING:.2f}%"), gr.update(visible=False), gr.update(visible=False)
+                yield (_update_progress(PROGRESS_CONVERTING, STAGE_DESCRIPTIONS['processing']),
+                       get_log_update(STAGE_DESCRIPTIONS['processing']),
+                       gr.update(value=""),
+                       get_player_update(False, False),
+                       gr.update(visible=False),
+                       gr.update(visible=False))
 
                 try:
                     audio_array = np.frombuffer(tts_audio, dtype=np.int16)
                 except Exception as e:
-                    yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 音频数据转换失败 - {str(e)}")
+                    yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                           gr.update(visible=False), gr.update(visible=False),
+                           gr.update(visible=True, value=f"### ❌ 音频数据转换失败 - {str(e)}"))
                     return
 
                 # 步骤7: 保存音频文件
-                yield _update_progress(PROGRESS_SAVING, f"生成进度 {PROGRESS_SAVING:.2f}%"), gr.update(visible=False), gr.update(visible=False)
+                yield (_update_progress(PROGRESS_SAVING, STAGE_DESCRIPTIONS['saving']),
+                       get_log_update(STAGE_DESCRIPTIONS['saving']),
+                       gr.update(value=""),
+                       get_player_update(False, False),
+                       gr.update(visible=False),
+                       gr.update(visible=False))
 
                 output_path = os.path.join(tempfile.gettempdir(), 'generated_voice.wav')
                 try:
@@ -1189,13 +1603,22 @@ def create_interface() -> gr.Blocks:
                         wav_file.setframerate(24000)
                         wav_file.writeframes(audio_array.tobytes())
                 except Exception as e:
-                    yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ 保存音频文件失败 - {str(e)}")
+                    yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                           gr.update(visible=False), gr.update(visible=False),
+                           gr.update(visible=True, value=f"### ❌ 保存音频文件失败 - {str(e)}"))
                     return
 
-                # 完成（隐藏进度条，显示音频）
-                yield gr.update(value=PROGRESS_DONE, visible=False, label=f"生成进度 {PROGRESS_DONE:.2f}%"), gr.update(value=output_path, visible=True), gr.update(visible=False)
+                # 完成（隐藏进度条、日志和播放器，显示最终音频）
+                yield (gr.update(value="", visible=False),
+                       gr.update(visible=False),
+                       gr.update(value="DONE"),
+                       gr.update(visible=False),
+                       gr.update(value=output_path, visible=True),
+                       gr.update(visible=False))
             else:
-                yield gr.update(value=0, visible=False), gr.update(visible=False), gr.update(visible=True, value=f"### ❌ API调用失败 - HTTP {response.status_code}")
+                yield (gr.update(value="", visible=False), gr.update(value=""), gr.update(value=""),
+                       gr.update(visible=False), gr.update(visible=False),
+                       gr.update(visible=True, value=f"### ❌ API调用失败 - HTTP {response.status_code}"))
 
         # ==================== 事件绑定 ====================
 
@@ -1332,7 +1755,7 @@ def create_interface() -> gr.Blocks:
         generate_btn.click(
             fn=handle_generate,
             inputs=[audio_upload, audio_mic, text_input, prompt_audio_text],
-            outputs=[progress_bar, output_audio, output_error]
+            outputs=[progress_bar, status_log, audio_data_holder, realtime_player, output_audio, output_error]
         )
 
         # 步骤3：导航按钮
@@ -1347,13 +1770,16 @@ def create_interface() -> gr.Blocks:
                 gr.update(value="", visible=False),  # step3_summary (清空并隐藏)
                 gr.update(value=None, visible=False),  # output_audio (清空并隐藏)
                 gr.update(value="", visible=False),    # output_error (清空并隐藏)
-                gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar (重置)
+                gr.update(value="", visible=False),  # progress_bar (重置)
+                gr.update(value="", visible=False),  # status_log (重置)
+                gr.update(value=""),  # audio_data_holder (重置)
+                gr.update(value="", visible=False),  # realtime_player (重置)
                 gr.update(visible=False, value=""),  # audio_trim_warning (隐藏警告框)
                 gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
                 gr.update(interactive=True),  # save_preset_btn (已有音频和文本，启用)
             ),
             inputs=[audio_upload, audio_mic],
-            outputs=[step1_indicator, step2_indicator, step3_indicator, step1_container, step2_container, step3_container, step3_summary, output_audio, output_error, progress_bar, audio_trim_warning, preset_save_status, save_preset_btn]
+            outputs=[step1_indicator, step2_indicator, step3_indicator, step1_container, step2_container, step3_container, step3_summary, output_audio, output_error, progress_bar, status_log, audio_data_holder, realtime_player, audio_trim_warning, preset_save_status, save_preset_btn]
         )
         step3_restart.click(
             fn=lambda: (
@@ -1370,13 +1796,16 @@ def create_interface() -> gr.Blocks:
                 gr.update(value="", visible=False),  # step3_summary (清空并隐藏)
                 gr.update(value=None, interactive=False),  # output_audio (清空并隐藏)
                 gr.update(value="", visible=False),    # output_error (清空并隐藏)
-                gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar (重置值、隐藏、重置label)
+                gr.update(value="", visible=False),  # progress_bar (重置)
+                gr.update(value="", visible=False),  # status_log (重置)
+                gr.update(value=""),  # audio_data_holder (重置)
+                gr.update(value="", visible=False),  # realtime_player (重置)
                 gr.update(interactive=False),  # generate_btn (禁用)
                 gr.update(visible=False, value=""),  # audio_trim_warning (隐藏警告框)
                 gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
             ),
             outputs=[step1_indicator, step2_indicator, step3_indicator, step1_container, step2_container, step3_container,
-                    audio_upload, audio_mic, prompt_audio_text, text_input, step3_summary, output_audio, output_error, progress_bar, generate_btn, audio_trim_warning, preset_save_status]
+                    audio_upload, audio_mic, prompt_audio_text, text_input, step3_summary, output_audio, output_error, progress_bar, status_log, audio_data_holder, realtime_player, generate_btn, audio_trim_warning, preset_save_status]
         )
 
         # 页面加载时初始化预设显示
@@ -1398,12 +1827,12 @@ def create_interface() -> gr.Blocks:
             outputs=[preset_title, preset_list, load_preset_dropdown, load_preset_btn, delete_preset_btn, preset_divider]
         )
 
-    return app
+    return app, realtime_audio_js
 
 
 def main():
     """主函数"""
-    app = create_interface()
+    app, realtime_audio_js = create_interface()
 
     # 自定义CSS样式 - 参照cv_gradio的专业配色方案
     custom_css = """
@@ -2154,22 +2583,231 @@ def main():
         margin: 20px 0 !important;
     }
 
-    /* 隐藏进度条右边的数值显示和重置按钮 */
-    .progress-slider .tab-like-container {
-        display: none !important;
+    /* ==================== 自定义进度条样式 ==================== */
+    .custom-progress-container {
+        margin: 16px 0 !important;
     }
 
-    .progress-slider input[type="number"] {
-        display: none !important;
+    .custom-progress-bar {
+        background: #f8f9fa;
+        border-radius: 12px;
+        padding: 16px 20px;
+        border: 1px solid #e9ecef;
     }
 
-    .progress-slider .reset-button {
-        display: none !important;
+    .custom-progress-bar .progress-label {
+        font-size: 14px;
+        font-weight: 600;
+        color: #1a1a2e;
+        margin-bottom: 10px;
     }
 
-    /* 针对所有gradio slider的通用隐藏 */
-    .gradio-slider .tab-like-container {
-        display: none !important;
+    .custom-progress-bar .progress-track {
+        height: 12px;
+        background: #e9ecef;
+        border-radius: 6px;
+        overflow: hidden;
+        position: relative;
+    }
+
+    .custom-progress-bar .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #3b82f6, #60a5fa);
+        border-radius: 6px;
+        transition: width 0.3s ease-out;
+        position: relative;
+        box-shadow: 0 0 10px rgba(59, 130, 246, 0.3);
+    }
+
+    .custom-progress-bar .progress-fill::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(90deg,
+            transparent 0%,
+            rgba(255,255,255,0.3) 50%,
+            transparent 100%);
+        animation: shimmer 1.5s infinite;
+    }
+
+    @keyframes shimmer {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(100%); }
+    }
+
+    .custom-progress-bar .progress-status {
+        font-size: 12px;
+        color: #6b7280;
+        margin-top: 8px;
+        display: block;
+    }
+
+    /* ==================== 流式播放器样式 ==================== */
+    .realtime-player-container {
+        margin: 12px 0 !important;
+    }
+
+    .streaming-player {
+        background: linear-gradient(135deg, #1a1a2e 0%, #2d2d44 100%);
+        border-radius: 12px;
+        padding: 16px 20px;
+        border: 1px solid #3d3d5c;
+    }
+
+    .streaming-player .player-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+    }
+
+    .streaming-player .player-icon {
+        font-size: 18px;
+    }
+
+    .streaming-player .player-title {
+        font-size: 14px;
+        font-weight: 500;
+        color: #e2e8f0;
+    }
+
+    .streaming-player .player-controls {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 10px;
+    }
+
+    .streaming-player .play-btn {
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        color: white;
+        border: none;
+        padding: 8px 20px;
+        border-radius: 20px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .streaming-player .play-btn:hover:not(:disabled) {
+        transform: scale(1.05);
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+    }
+
+    .streaming-player .play-btn:disabled {
+        background: #4b5563;
+        cursor: not-allowed;
+        opacity: 0.6;
+    }
+
+    .streaming-player .status-text {
+        font-size: 13px;
+        color: #9ca3af;
+    }
+
+    .streaming-player .buffer-track {
+        height: 4px;
+        background: #374151;
+        border-radius: 2px;
+        overflow: hidden;
+        margin-bottom: 8px;
+    }
+
+    .streaming-player .buffer-bar {
+        height: 100%;
+        background: linear-gradient(90deg, #10b981, #34d399);
+        border-radius: 2px;
+        transition: width 0.3s ease;
+    }
+
+    .streaming-player .player-hint {
+        font-size: 11px;
+        color: #6b7280;
+    }
+
+    /* 音频波形动画 */
+    .audio-wave {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        height: 20px;
+    }
+
+    .audio-wave span {
+        width: 3px;
+        background: #10b981;
+        border-radius: 2px;
+        animation: wave 0.5s ease-in-out infinite;
+    }
+
+    .audio-wave span:nth-child(1) { animation-delay: 0s; height: 8px; }
+    .audio-wave span:nth-child(2) { animation-delay: 0.1s; height: 16px; }
+    .audio-wave span:nth-child(3) { animation-delay: 0.2s; height: 12px; }
+    .audio-wave span:nth-child(4) { animation-delay: 0.3s; height: 20px; }
+    .audio-wave span:nth-child(5) { animation-delay: 0.4s; height: 10px; }
+
+    @keyframes wave {
+        0%, 100% { transform: scaleY(0.5); }
+        50% { transform: scaleY(1); }
+    }
+
+    /* 状态日志终端风格 */
+    .status-log textarea {
+        background-color: #1a1a2e !important;
+        color: #10b981 !important;
+        font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace !important;
+        font-size: 12px !important;
+        line-height: 1.5 !important;
+        border: 1px solid #2d2d44 !important;
+        border-radius: 8px !important;
+        padding: 12px !important;
+    }
+
+    .status-log label {
+        color: #6b7280 !important;
+        font-size: 12px !important;
+    }
+
+    .status-log textarea::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    .status-log textarea::-webkit-scrollbar-track {
+        background: #1a1a2e;
+    }
+
+    .status-log textarea::-webkit-scrollbar-thumb {
+        background: #4b5563;
+        border-radius: 3px;
+    }
+
+    /* 折叠日志面板样式 */
+    .status-log-accordion {
+        margin-top: 10px !important;
+        margin-bottom: 10px !important;
+    }
+
+    .status-log-accordion .label-wrap {
+        padding: 8px 12px !important;
+        background: #f8fafc !important;
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 6px !important;
+    }
+
+    .status-log-accordion .label-wrap span {
+        font-size: 13px !important;
+        color: #64748b !important;
+    }
+
+    .status-log-accordion .icon {
+        color: #94a3b8 !important;
     }
     """
 
@@ -2213,7 +2851,8 @@ def main():
         show_error=True,
         quiet=False,
         theme=theme,
-        css=custom_css
+        css=custom_css,
+        js=realtime_audio_js
     )
 
 
