@@ -297,8 +297,8 @@ def create_interface() -> gr.Blocks:
                         scale=2,
                         visible=False
                     )
-                    load_preset_btn = gr.Button("加载预设", variant="primary", size="sm", scale=1, visible=False)
-                    delete_preset_btn = gr.Button("删除预设", variant="stop", size="sm", scale=1, visible=False)
+                    load_preset_btn = gr.Button("加载预设", variant="primary", size="sm", scale=1, visible=False, interactive=False)
+                    delete_preset_btn = gr.Button("删除预设", variant="stop", size="sm", scale=1, visible=False, interactive=False)
 
                 # 状态消息和分隔符
                 preset_load_status = gr.Markdown("", visible=False, elem_classes=["instructions"])
@@ -393,7 +393,7 @@ def create_interface() -> gr.Blocks:
                         scale=2,
                         max_lines=1
                     )
-                    save_preset_btn = gr.Button("保存预设", variant="primary", size="sm", scale=1)
+                    save_preset_btn = gr.Button("保存预设", variant="primary", size="sm", scale=1, interactive=False)
                 preset_save_status = gr.Markdown("", visible=False, elem_classes=["instructions"])
                 gr.Markdown("""
 **提示：**
@@ -498,9 +498,9 @@ def create_interface() -> gr.Blocks:
                 gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
                 # 预设相关组件
                 gr.update(value=preset_manager.get_presets_display() if has_presets else "", visible=has_presets),  # preset_list
-                gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], visible=has_presets),  # load_preset_dropdown
-                gr.update(visible=has_presets),  # load_preset_btn
-                gr.update(visible=has_presets),  # delete_preset_btn
+                gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], value=None, visible=has_presets),  # load_preset_dropdown (重置选择)
+                gr.update(visible=has_presets, interactive=False),  # load_preset_btn (禁用)
+                gr.update(visible=has_presets, interactive=False),  # delete_preset_btn (禁用)
                 gr.update(visible=False, value=""),  # preset_load_status
                 gr.update(visible=has_presets),  # preset_title
                 gr.update(visible=has_presets),  # preset_divider
@@ -527,6 +527,7 @@ def create_interface() -> gr.Blocks:
                 gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar
                 gr.update(visible=False, value=""),  # audio_trim_warning (隐藏警告框)
                 gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
+                gr.update(interactive=False),  # save_preset_btn (初始禁用，等输入文本后启用)
             ]
 
             # 如果有预设，添加预设加载状态的更新
@@ -648,9 +649,9 @@ def create_interface() -> gr.Blocks:
                 gr.update(value=audio_upload_file),  # audio_upload (保持原值以触发change事件)
                 # 预设相关组件
                 gr.update(value=preset_manager.get_presets_display() if has_presets else "", visible=has_presets),  # preset_list
-                gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], visible=has_presets),  # load_preset_dropdown
-                gr.update(visible=has_presets),  # load_preset_btn
-                gr.update(visible=has_presets),  # delete_preset_btn
+                gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], value=None, visible=has_presets),  # load_preset_dropdown (重置选择)
+                gr.update(visible=has_presets, interactive=False),  # load_preset_btn (禁用)
+                gr.update(visible=has_presets, interactive=False),  # delete_preset_btn (禁用)
                 gr.update(visible=False, value=""),  # preset_load_status
                 gr.update(visible=has_presets),  # preset_title
                 gr.update(visible=has_presets),  # preset_divider
@@ -666,6 +667,20 @@ def create_interface() -> gr.Blocks:
             """验证步骤3：检查是否输入了要合成的文本"""
             is_valid = bool(text and text.strip() and len(text) <= MAX_TEXT_LENGTH)
             return gr.update(interactive=is_valid)
+
+        def validate_preset_dropdown(preset_choice):
+            """验证预设下拉框：检查是否选择了预设"""
+            is_selected = bool(preset_choice and preset_choice.strip())
+            return (
+                gr.update(interactive=is_selected),  # load_preset_btn
+                gr.update(interactive=is_selected),  # delete_preset_btn
+                gr.update(visible=False, value="")   # preset_load_status (隐藏状态消息)
+            )
+
+        def validate_save_preset(prompt_text):
+            """验证保存预设：检查是否输入了参考文本（音频已在步骤1上传）"""
+            has_text = bool(prompt_text and prompt_text.strip())
+            return gr.update(interactive=has_text)
 
         # ASR提取按钮处理函数
         def handle_asr_extract(audio_upload_file, audio_mic_file):
@@ -783,9 +798,9 @@ def create_interface() -> gr.Blocks:
                 return (
                     gr.update(value="❌ 请先选择要删除的预设", visible=True),  # preset_load_status
                     gr.update(value=preset_manager.get_presets_display() if has_presets else "", visible=has_presets),  # preset_list
-                    gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], visible=has_presets),  # load_preset_dropdown
-                    gr.update(visible=has_presets),  # load_preset_btn
-                    gr.update(visible=has_presets),  # delete_preset_btn
+                    gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], value=None, visible=has_presets),  # load_preset_dropdown
+                    gr.update(visible=has_presets, interactive=False),  # load_preset_btn (禁用)
+                    gr.update(visible=has_presets, interactive=False),  # delete_preset_btn (禁用)
                     gr.update(visible=has_presets),  # preset_title
                     gr.update(visible=has_presets),  # preset_divider
                 )
@@ -804,9 +819,9 @@ def create_interface() -> gr.Blocks:
                 return (
                     gr.update(value="❌ 未找到选中的预设", visible=True),  # preset_load_status
                     gr.update(value=preset_manager.get_presets_display() if has_presets else "", visible=has_presets),  # preset_list
-                    gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], visible=has_presets),  # load_preset_dropdown
-                    gr.update(visible=has_presets),  # load_preset_btn
-                    gr.update(visible=has_presets),  # delete_preset_btn
+                    gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], value=None, visible=has_presets),  # load_preset_dropdown
+                    gr.update(visible=has_presets, interactive=False),  # load_preset_btn (禁用)
+                    gr.update(visible=has_presets, interactive=False),  # delete_preset_btn (禁用)
                     gr.update(visible=has_presets),  # preset_title
                     gr.update(visible=has_presets),  # preset_divider
                 )
@@ -820,9 +835,9 @@ def create_interface() -> gr.Blocks:
                     return (
                         gr.update(value=f"✅ 音色预设 '{selected_preset['name']}' 已删除", visible=True),  # preset_load_status
                         gr.update(value=preset_manager.get_presets_display(), visible=True),  # preset_list
-                        gr.update(choices=preset_manager.get_preset_choices(), visible=True),  # load_preset_dropdown
-                        gr.update(visible=True),  # load_preset_btn
-                        gr.update(visible=True),  # delete_preset_btn
+                        gr.update(choices=preset_manager.get_preset_choices(), value=None, visible=True),  # load_preset_dropdown (重置选择)
+                        gr.update(visible=True, interactive=False),  # load_preset_btn (禁用)
+                        gr.update(visible=True, interactive=False),  # delete_preset_btn (禁用)
                         gr.update(visible=True),  # preset_title
                         gr.update(visible=True),  # preset_divider
                     )
@@ -842,9 +857,9 @@ def create_interface() -> gr.Blocks:
                 return (
                     gr.update(value=f"❌ 删除预设 '{selected_preset['name']}' 失败", visible=True),  # preset_load_status
                     gr.update(value=preset_manager.get_presets_display() if has_presets else "", visible=has_presets),  # preset_list
-                    gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], visible=has_presets),  # load_preset_dropdown
-                    gr.update(visible=has_presets),  # load_preset_btn
-                    gr.update(visible=has_presets),  # delete_preset_btn
+                    gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], value=None, visible=has_presets),  # load_preset_dropdown (重置选择)
+                    gr.update(visible=has_presets, interactive=False),  # load_preset_btn (禁用)
+                    gr.update(visible=has_presets, interactive=False),  # delete_preset_btn (禁用)
                     gr.update(visible=has_presets),  # preset_title
                     gr.update(visible=has_presets),  # preset_divider
                 )
@@ -1200,7 +1215,7 @@ def create_interface() -> gr.Blocks:
         step1_next.click(
             fn=go_to_step2,
             inputs=[audio_upload, audio_mic],
-            outputs=[step1_indicator, step2_indicator, step3_indicator, step1_container, step2_container, step3_container, step2_audio_display, step3_summary, output_audio, output_error, progress_bar, audio_trim_warning, preset_save_status]
+            outputs=[step1_indicator, step2_indicator, step3_indicator, step1_container, step2_container, step3_container, step2_audio_display, step3_summary, output_audio, output_error, progress_bar, audio_trim_warning, preset_save_status, save_preset_btn]
         )
 
         # 步骤1：加载预设按钮（始终绑定事件，按钮可见性由其他逻辑控制）
@@ -1241,6 +1256,13 @@ def create_interface() -> gr.Blocks:
             ]
         )
 
+        # 步骤1：预设下拉框选择验证
+        load_preset_dropdown.change(
+            fn=validate_preset_dropdown,
+            inputs=[load_preset_dropdown],
+            outputs=[load_preset_btn, delete_preset_btn, preset_load_status]
+        )
+
         # 步骤2：ASR提取按钮
         asr_btn.click(
             fn=handle_asr_extract,
@@ -1261,12 +1283,18 @@ def create_interface() -> gr.Blocks:
             outputs=[preset_save_status]
         )
 
-        # 步骤2：文本输入后启用"下一步"按钮
+        # 步骤2：文本输入后启用"下一步"和"保存预设"按钮
         prompt_audio_text.change(
-            fn=validate_step2,
+            fn=lambda text: (
+                validate_step2(text),
+                validate_save_preset(text)
+            ),
             inputs=[prompt_audio_text],
-            outputs=[step2_next]
+            outputs=[step2_next, save_preset_btn]
         )
+
+        # 步骤2：音频变化时验证保存预设按钮
+        # 注意：这个会在进入步骤2时通过 go_to_step2 触发 audio_upload 的 change 事件
 
         # 步骤2：导航按钮
         step2_prev.click(
@@ -1322,9 +1350,10 @@ def create_interface() -> gr.Blocks:
                 gr.update(value=0, visible=False, label="生成进度 0.00%"),  # progress_bar (重置)
                 gr.update(visible=False, value=""),  # audio_trim_warning (隐藏警告框)
                 gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
+                gr.update(interactive=True),  # save_preset_btn (已有音频和文本，启用)
             ),
             inputs=[audio_upload, audio_mic],
-            outputs=[step1_indicator, step2_indicator, step3_indicator, step1_container, step2_container, step3_container, step3_summary, output_audio, output_error, progress_bar, audio_trim_warning, preset_save_status]
+            outputs=[step1_indicator, step2_indicator, step3_indicator, step1_container, step2_container, step3_container, step3_summary, output_audio, output_error, progress_bar, audio_trim_warning, preset_save_status, save_preset_btn]
         )
         step3_restart.click(
             fn=lambda: (
@@ -1583,6 +1612,24 @@ def main():
         min-height: auto !important;
     }
 
+    /* 隐藏的摘要文本完全不可见（针对 Gradio visible=False） */
+    .summary-text[style*="display: none"],
+    .step-container .summary-text[style*="display: none"],
+    .step3-summary[style*="display: none"] {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        border: none !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        max-height: 0 !important;
+        background: none !important;
+        width: 0 !important;
+        overflow: hidden !important;
+    }
+
     /* 空摘要文本不显示 - 更强的规则 */
     .summary-text:empty,
     .summary-text[value=""],
@@ -1604,6 +1651,14 @@ def main():
         height: 0 !important;
         padding: 0 !important;
         margin: 0 !important;
+    }
+
+    /* 隐藏隐藏元素的包装器 */
+    .step3-summary[style*="display: none"] {
+        display: none !important;
+        height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
     }
 
     .summary-text p {
