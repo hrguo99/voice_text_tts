@@ -66,7 +66,7 @@ echo ""
 echo -e "${YELLOW}[3/4] 启动 Docker 容器...${NC}"
 
 # 配置环境变量
-API_HOST="${API_HOST:-127.0.0.1}"
+API_HOST="${API_HOST:-host.docker.internal}"
 API_PORT="${API_PORT:-50000}"
 SERVER_PORT="${SERVER_PORT:-7863}"
 ASR_ENABLED="${ASR_ENABLED:-false}"
@@ -74,6 +74,7 @@ ASR_ENABLED="${ASR_ENABLED:-false}"
 docker run -d \
     --name "$CONTAINER_NAME" \
     --restart unless-stopped \
+    --add-host=host.docker.internal:host-gateway \
     -p "${SERVER_PORT}:7863" \
     -e API_HOST="$API_HOST" \
     -e API_PORT="$API_PORT" \
