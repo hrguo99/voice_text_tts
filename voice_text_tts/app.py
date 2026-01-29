@@ -1203,44 +1203,43 @@ def create_interface() -> gr.Blocks:
             outputs=[step1_indicator, step2_indicator, step3_indicator, step1_container, step2_container, step3_container, step2_audio_display, step3_summary, output_audio, output_error, progress_bar, audio_trim_warning, preset_save_status]
         )
 
-        # 步骤1：加载预设按钮（如果有预设）
-        if preset_manager.get_presets():
-            load_preset_btn.click(
-                fn=handle_load_preset_and_go,
-                inputs=[load_preset_dropdown],
-                outputs=[
-                    preset_load_status,      # status message
-                    step3_summary,           # summary
-                    audio_upload,            # audio path (for internal use)
-                    prompt_audio_text,       # prompt text (for internal use)
-                    step1_indicator,         # step indicators
-                    step2_indicator,
-                    step3_indicator,
-                    step1_container,         # container visibility
-                    step2_container,
-                    step3_container,
-                    output_audio,
-                    output_error,
-                    progress_bar,
-                    audio_trim_warning,      # hide warning
-                    preset_save_status       # hide save status
-                ]
-            )
+        # 步骤1：加载预设按钮（始终绑定事件，按钮可见性由其他逻辑控制）
+        load_preset_btn.click(
+            fn=handle_load_preset_and_go,
+            inputs=[load_preset_dropdown],
+            outputs=[
+                preset_load_status,      # status message
+                step3_summary,           # summary
+                audio_upload,            # audio path (for internal use)
+                prompt_audio_text,       # prompt text (for internal use)
+                step1_indicator,         # step indicators
+                step2_indicator,
+                step3_indicator,
+                step1_container,         # container visibility
+                step2_container,
+                step3_container,
+                output_audio,
+                output_error,
+                progress_bar,
+                audio_trim_warning,      # hide warning
+                preset_save_status       # hide save status
+            ]
+        )
 
-            # 步骤1：删除预设按钮
-            delete_preset_btn.click(
-                fn=handle_delete_preset,
-                inputs=[load_preset_dropdown],
-                outputs=[
-                    preset_load_status,      # status message
-                    preset_list,             # update preset list display
-                    load_preset_dropdown,   # update dropdown choices
-                    load_preset_btn,        # update button visibility
-                    delete_preset_btn,      # update button visibility
-                    preset_title,           # update title visibility
-                    preset_divider          # update divider visibility
-                ]
-            )
+        # 步骤1：删除预设按钮（始终绑定事件）
+        delete_preset_btn.click(
+            fn=handle_delete_preset,
+            inputs=[load_preset_dropdown],
+            outputs=[
+                preset_load_status,      # status message
+                preset_list,             # update preset list display
+                load_preset_dropdown,   # update dropdown choices
+                load_preset_btn,        # update button visibility
+                delete_preset_btn,      # update button visibility
+                preset_title,           # update title visibility
+                preset_divider          # update divider visibility
+            ]
+        )
 
         # 步骤2：ASR提取按钮
         asr_btn.click(
