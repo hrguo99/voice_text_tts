@@ -982,10 +982,26 @@ def create_interface() -> tuple[gr.Blocks, str]:
             reference_audio = audio_upload_file or audio_mic_file
 
             if not reference_audio:
-                return gr.update(value="❌ 请先上传或录制参考音频", visible=True)
+                return (
+                    gr.update(value="❌ 请先上传或录制参考音频", visible=True),  # preset_save_status
+                    gr.update(),  # preset_title (保持不变)
+                    gr.update(),  # preset_list (保持不变)
+                    gr.update(),  # load_preset_dropdown (保持不变)
+                    gr.update(),  # load_preset_btn (保持不变)
+                    gr.update(),  # delete_preset_btn (保持不变)
+                    gr.update(),  # preset_divider (保持不变)
+                )
 
             if not prompt_text or not prompt_text.strip():
-                return gr.update(value="❌ 请先输入参考音频文本", visible=True)
+                return (
+                    gr.update(value="❌ 请先输入参考音频文本", visible=True),  # preset_save_status
+                    gr.update(),  # preset_title (保持不变)
+                    gr.update(),  # preset_list (保持不变)
+                    gr.update(),  # load_preset_dropdown (保持不变)
+                    gr.update(),  # load_preset_btn (保持不变)
+                    gr.update(),  # delete_preset_btn (保持不变)
+                    gr.update(),  # preset_divider (保持不变)
+                )
 
             # 使用自定义名称或默认名称
             if not preset_name or not preset_name.strip():
@@ -995,9 +1011,27 @@ def create_interface() -> tuple[gr.Blocks, str]:
             preset = preset_manager.add_preset(preset_name.strip(), reference_audio, prompt_text.strip())
 
             if preset:
-                return gr.update(value=f"✅ 音色预设 '{preset_name}' 保存成功！返回步骤1即可加载使用", visible=True)
+                # 保存成功后，更新预设列表显示
+                has_presets = bool(preset_manager.get_presets())
+                return (
+                    gr.update(value=f"✅ 音色预设 '{preset_name}' 保存成功！返回步骤1即可加载使用", visible=True),  # preset_save_status
+                    gr.update(visible=has_presets),  # preset_title
+                    gr.update(value=preset_manager.get_presets_display() if has_presets else "", visible=has_presets),  # preset_list
+                    gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], visible=has_presets),  # load_preset_dropdown
+                    gr.update(visible=has_presets),  # load_preset_btn
+                    gr.update(visible=has_presets),  # delete_preset_btn
+                    gr.update(visible=has_presets),  # preset_divider
+                )
             else:
-                return gr.update(value="❌ 保存失败，请检查音频文件", visible=True)
+                return (
+                    gr.update(value="❌ 保存失败，请检查音频文件", visible=True),  # preset_save_status
+                    gr.update(),  # preset_title (保持不变)
+                    gr.update(),  # preset_list (保持不变)
+                    gr.update(),  # load_preset_dropdown (保持不变)
+                    gr.update(),  # load_preset_btn (保持不变)
+                    gr.update(),  # delete_preset_btn (保持不变)
+                    gr.update(),  # preset_divider (保持不变)
+                )
 
         def handle_load_preset_and_go(preset_choice):
             """加载音色预设并直接跳转到步骤3"""
@@ -1703,7 +1737,7 @@ def create_interface() -> tuple[gr.Blocks, str]:
         save_preset_btn.click(
             fn=handle_save_preset,
             inputs=[preset_name_input, audio_upload, audio_mic, prompt_audio_text],
-            outputs=[preset_save_status]
+            outputs=[preset_save_status, preset_title, preset_list, load_preset_dropdown, load_preset_btn, delete_preset_btn, preset_divider]
         )
 
         # 步骤2：文本输入后启用"下一步"和"保存预设"按钮
@@ -1781,8 +1815,11 @@ def create_interface() -> tuple[gr.Blocks, str]:
             inputs=[audio_upload, audio_mic],
             outputs=[step1_indicator, step2_indicator, step3_indicator, step1_container, step2_container, step3_container, step3_summary, output_audio, output_error, progress_bar, status_log, audio_data_holder, realtime_player, audio_trim_warning, preset_save_status, save_preset_btn]
         )
-        step3_restart.click(
-            fn=lambda: (
+        # 重新开始功能，同时更新预设列表
+        def handle_restart():
+            """重新开始并更新预设列表"""
+            has_presets = bool(preset_manager.get_presets())
+            return (
                 gr.update(value='<div class="step-item active"><span class="step-number">1</span><span class="step-label">上传参考音频</span></div>'),
                 gr.update(value='<div class="step-item"><span class="step-number">2</span><span class="step-label">输入音频文本</span></div>'),
                 gr.update(value='<div class="step-item"><span class="step-number">3</span><span class="step-label">生成语音</span></div>'),
@@ -1803,9 +1840,20 @@ def create_interface() -> tuple[gr.Blocks, str]:
                 gr.update(interactive=False),  # generate_btn (禁用)
                 gr.update(visible=False, value=""),  # audio_trim_warning (隐藏警告框)
                 gr.update(visible=False, value=""),  # preset_save_status (隐藏保存状态)
-            ),
+                # 更新预设列表显示
+                gr.update(visible=has_presets),  # preset_title
+                gr.update(value=preset_manager.get_presets_display() if has_presets else "", visible=has_presets),  # preset_list
+                gr.update(choices=preset_manager.get_preset_choices() if has_presets else [], visible=has_presets),  # load_preset_dropdown
+                gr.update(visible=has_presets),  # load_preset_btn
+                gr.update(visible=has_presets),  # delete_preset_btn
+                gr.update(visible=has_presets),  # preset_divider
+            )
+
+        step3_restart.click(
+            fn=handle_restart,
             outputs=[step1_indicator, step2_indicator, step3_indicator, step1_container, step2_container, step3_container,
-                    audio_upload, audio_mic, prompt_audio_text, text_input, step3_summary, output_audio, output_error, progress_bar, status_log, audio_data_holder, realtime_player, generate_btn, audio_trim_warning, preset_save_status]
+                    audio_upload, audio_mic, prompt_audio_text, text_input, step3_summary, output_audio, output_error, progress_bar, status_log, audio_data_holder, realtime_player, generate_btn, audio_trim_warning, preset_save_status,
+                    preset_title, preset_list, load_preset_dropdown, load_preset_btn, delete_preset_btn, preset_divider]
         )
 
         # 页面加载时初始化预设显示
