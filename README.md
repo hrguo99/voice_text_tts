@@ -46,7 +46,12 @@ guohaoran/
 │   └── README.md                # CV 应用文档
 │
 ├── FUNASR_model/                # FunASR 模型存储
-├── tts_model/                   # TTS 模型存储
+├── tts_model/                   # TTS 模型服务和代码
+│   ├── server.py                # FastAPI TTS 服务器
+│   ├── client.py                # 测试客户端
+│   ├── update_docker.sh         # Docker 代码更新脚本
+│   ├── logs.sh                  # 日志查看脚本
+│   └── README.md                # TTS 模型文档
 ├── ASR_PROJECT_GUIDE.md         # ASR 项目详细指南
 ├── FUNASR_REFERENCE.md          # FunASR 参考文档
 └── README.md                    # 本文档
@@ -187,6 +192,70 @@ cd voice_text_tts_docker
 cd voice_text_tts_docker
 docker-compose up -d --build
 ```
+
+### TTS 模型服务部署
+
+TTS 模型服务使用 **Fun-CosyVoice3-0.5B-2512**，需要单独部署。
+
+#### 拉取官方镜像
+
+```bash
+# 从 ModelScope 拉取 CosyVoice3 镜像
+docker pull registry.cn-beijing.aliyuncs.com/modelscope-repos/cosyvoice3:v1.0.0
+```
+
+#### 启动 TTS 服务
+
+```bash
+docker run -d \
+  --name cosyvoice3-tts \
+  --restart unless-stopped \
+  -p 50000:50000 \
+  -v ~/.cache/modelscope:/root/.cache/modelscope \
+  registry.cn-beijing.aliyuncs.com/modelscope-repos/cosyvoice3:v1.0.0
+```
+
+#### 更新代码（使用增强版 server.py）
+
+本项目对原版 `server.py` 进行了优化，支持：
+- 流式响应进度信息
+- 首块生成时间优化
+- 细粒度子块分割
+
+使用更新脚本：
+
+```bash
+cd tts_model
+./update_docker.sh
+```
+
+或手动更新：
+
+```bash
+# 复制更新后的代码到容器
+docker cp tts_model/server.py cosyvoice3-tts:/app/server.py
+
+# 重启容器使更改生效
+docker restart cosyvoice3-tts
+```
+
+#### 查看 TTS 服务日志
+
+```bash
+# 使用脚本
+cd tts_model
+./logs.sh
+
+# 或直接查看
+docker logs -f cosyvoice3-tts
+```
+
+#### TTS 服务详情
+
+- **模型**: Fun-CosyVoice3-0.5B-2512
+- **端口**: 50000
+- **模型页**: [ModelScope](https://modelscope.cn/models/FunAudioLLM/Fun-CosyVoice3-0.5B-2512)
+- **详细文档**: [tts_model/README.md](tts_model/README.md)
 
 ## 功能使用
 
@@ -426,14 +495,15 @@ voice_text_tts/
 
 - [ASR 项目指南](ASR_PROJECT_GUIDE.md) - ASR 功能详细说明
 - [FunASR 参考](FUNASR_REFERENCE.md) - FunASR 使用参考
+- [TTS 模型服务](tts_model/README.md) - TTS Docker 部署和代码更新
 - [voice_text_tts/README.md](voice_text_tts/README.md) - 应用详细文档
 - [voice_text_tts_docker/README.md](voice_text_tts_docker/README.md) - Docker 部署文档
 - [asr_server_mock/README.md](asr_server_mock/README.md) - ASR 服务器文档
 
 ## 分支信息
 
-- **主分支**：`develop_ASR`
-- **功能**：ASR 语音识别集成
+- **主分支**：`develop`
+- **历史分支**：`develop_ASR`（ASR 语音识别集成）、`develop_smooth`（流式音频播放）
 - **状态**：活跃开发
 
 ## 许可证
